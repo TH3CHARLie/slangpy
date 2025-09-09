@@ -60,6 +60,7 @@ from .core.struct import Struct
 from .core.module import Module
 from .core.instance import InstanceList, InstanceBuffer
 from .core.packedarg import pack
+from .core.tuner import Tuner
 
 # Py torch integration
 from .torchintegration import *

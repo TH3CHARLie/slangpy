@@ -2,7 +2,7 @@
 from typing import TYPE_CHECKING, Any, Optional
 
 from slangpy.core.native import AccessType, CallMode, CallDataMode, NativeMarshall
-
+from slangpy.core.function import AutotuneSetting
 import slangpy.bindings.typeregistry as tr
 import slangpy.reflection as slr
 from slangpy import ModifierID, TypeReflection, DeviceType
@@ -383,6 +383,20 @@ def generate_constants(build_info: "FunctionBuildInfo", cg: CodeGen):
                 )
 
 
+def generate_external_structs(build_info: "FunctionBuildInfo", cg: CodeGen):
+    if build_info.autotune_settings is not None:
+        for k, v in build_info.autotune_settings.items():
+            if isinstance(v, AutotuneSetting):
+                struct_name = k
+                interface_name = v.interface_name
+                assigned_struct_name = v.assigned_struct_name
+                cg.constants.append_statement(f"export struct {struct_name} : {interface_name} = {assigned_struct_name}")
+            else:
+                raise KernelGenException(
+                    f"Autotune setting '{k}' must be an AutotuneSetting, not {type(v).__name__}"
+                )
+
+
 def generate_code(
     context: BindContext,
     build_info: "FunctionBuildInfo",
@@ -460,6 +474,9 @@ def generate_code(
 
     # Generate constants if specified
     generate_constants(build_info, cg)
+
+    # Generate any external structs needed for autotuning
+    generate_external_structs(build_info, cg)
 
     # Generate additional link time constants definition code. These are declared in callshape.slang
     # and used to generated call_ids that can be queried by user modules.

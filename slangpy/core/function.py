@@ -60,6 +60,7 @@ class FunctionBuildInfo:
         self.return_type: Optional[Union[type, str]] = None
         self.logger: Optional[Logger] = None
         self.call_group_shape: Optional[Shape] = None
+        self.autotune_settings: dict[str, Any] = {}
 
 
 class FunctionNode(NativeFunctionNode):
@@ -180,6 +181,9 @@ class FunctionNode(NativeFunctionNode):
             else:
                 raise ValueError(f"Unknown return type '{return_type}'")
         return FunctionNodeReturnType(self, return_type)
+
+    def with_settings(self, settings: dict[str, Any]):
+        return FunctionNodeAutotune(self, settings)
 
     def thread_group_size(self, thread_group_size: uint3):
         """
@@ -476,6 +480,24 @@ class FunctionNodeReturnType(FunctionNode):
     def _populate_build_info(self, info: FunctionBuildInfo):
         info.return_type = self.return_type
 
+class FunctionNodeAutotune(FunctionNode):
+    def __init__(self, parent: NativeFunctionNode, settings: dict[str, Any]) -> None:
+        super().__init__(parent, FunctionNodeType.kernelgen, settings)
+        self.slangpy_signature = str(settings)
+
+    @property
+    def settings(self):
+        return cast(dict[str, Any], self._native_data)
+
+    def _populate_build_info(self, info: FunctionBuildInfo):
+        info.autotune_settings.update(self.settings)
+
+class AutotuneSetting:
+    def __init__(self, name: str, interface_name: str, assigned_struct_name: str) -> None:
+        super().__init__()
+        self.name = name
+        self.interface_name = interface_name
+        self.assigned_struct_name = assigned_struct_name
 
 class FunctionNodeThreadGroupSize(FunctionNode):
     def __init__(self, parent: NativeFunctionNode, thread_group_size: uint3) -> None:
