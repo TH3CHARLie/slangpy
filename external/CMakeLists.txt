@@ -54,9 +54,9 @@ endif()
 
 set(SGL_SLANG_DEBUG_INFO ON CACHE BOOL "Download debug info for slang")
 
-set(SGL_LOCAL_SLANG OFF CACHE BOOL "Use a local build of slang instead of downloading a prebuilt binary")
-set(SGL_LOCAL_SLANG_DIR "${CMAKE_SOURCE_DIR}/../slang" CACHE PATH "Path to a local slang build")
-set(SGL_LOCAL_SLANG_BUILD_DIR "build/Debug" CACHE STRING "Build directory of the local slang build")
+set(SGL_LOCAL_SLANG ON CACHE BOOL "Use a local build of slang instead of downloading a prebuilt binary")
+set(SGL_LOCAL_SLANG_DIR "C:\\Users\\xuanday\\dev\\slang" CACHE PATH "Path to a local slang build")
+set(SGL_LOCAL_SLANG_BUILD_DIR "build/Release" CACHE STRING "Build directory of the local slang build")
 
 set(SLANG_VERSION "2025.16")
 set(SLANG_URL_BASE "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}")
@@ -87,14 +87,14 @@ elseif(SGL_MACOS)
     endif()
 endif()
 
-sgl_download_package(slang ${SLANG_URL})
-
-set(SLANG_DIR ${slang_SOURCE_DIR})
-set(SLANG_INCLUDE_DIR ${slang_SOURCE_DIR}/include)
-
 if(SGL_LOCAL_SLANG)
     set(SLANG_DIR ${SGL_LOCAL_SLANG_DIR}/${SGL_LOCAL_SLANG_BUILD_DIR})
     set(SLANG_INCLUDE_DIR ${SGL_LOCAL_SLANG_DIR}/include)
+else()
+    sgl_download_package(slang ${SLANG_URL})
+
+    set(SLANG_DIR ${slang_SOURCE_DIR})
+    set(SLANG_INCLUDE_DIR ${slang_SOURCE_DIR}/include)
 endif()
 
 if(SGL_WINDOWS)

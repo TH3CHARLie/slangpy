@@ -1194,6 +1194,8 @@ def test_attribute_reflection(test_id: str, device_type: spy.DeviceType):
             int val;
         }
 
+        interface IFloat { }
+
         [Foo(42)]
         extern struct MyStruct;
     """,
@@ -1211,6 +1213,19 @@ def test_attribute_reflection(test_id: str, device_type: spy.DeviceType):
     argument_type = user_attr.argument_type(0)
     assert argument_type is not None
     assert argument_type.name == "int"
+
+    module_decl = module.module_decl
+    child_count = module_decl.child_count
+    print(f"Module has {child_count} children")
+    childrens = module_decl.children
+    for i in range(child_count):
+        child = childrens[i]
+        if child.kind == spy.DeclReflection.Kind.func or child.kind == spy.DeclReflection.Kind.struct:
+            print(f"Child {i} is {child.kind} named {child.name}")
+        child_as_type = child.as_type()
+        if child_as_type is not None:
+            print(f"Child {i} is interface type named {child_as_type.name}, kind code {child_as_type.kind}")
+
 
 
 # This test reproduces issues with reflection where 2 independently loaded
