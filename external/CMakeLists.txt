@@ -58,7 +58,7 @@ set(SGL_LOCAL_SLANG ON CACHE BOOL "Use a local build of slang instead of downloa
 set(SGL_LOCAL_SLANG_DIR "C:\\Users\\xuanday\\dev\\slang" CACHE PATH "Path to a local slang build")
 set(SGL_LOCAL_SLANG_BUILD_DIR "build/Release" CACHE STRING "Build directory of the local slang build")
 
-set(SLANG_VERSION "2025.16")
+set(SLANG_VERSION "2025.18")
 set(SLANG_URL_BASE "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}")
 
 if(SGL_WINDOWS)
