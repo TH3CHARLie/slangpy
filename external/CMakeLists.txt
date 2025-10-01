@@ -55,7 +55,7 @@ endif()
 set(SGL_SLANG_DEBUG_INFO ON CACHE BOOL "Download debug info for slang")
 
 set(SGL_LOCAL_SLANG ON CACHE BOOL "Use a local build of slang instead of downloading a prebuilt binary")
-set(SGL_LOCAL_SLANG_DIR "C:\\Users\\xuanday\\dev\\slang" CACHE PATH "Path to a local slang build")
+set(SGL_LOCAL_SLANG_DIR "/home/xuanday/dev/slang" CACHE PATH "Path to a local slang build")
 set(SGL_LOCAL_SLANG_BUILD_DIR "build/Release" CACHE STRING "Build directory of the local slang build")
 
 set(SLANG_VERSION "2025.18")
