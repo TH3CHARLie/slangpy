@@ -18,7 +18,7 @@ interface IFoo {
     float exec(float a, int b);
 }
 
-struct FooSlow {
+struct FooSlow : IFoo {
     float exec(float a, int b) {
         float result = 0.0;
         for (int i = 0; i < b; i++) {
@@ -28,7 +28,7 @@ struct FooSlow {
     }
 }
 
-struct FooFast {
+struct FooFast : IFoo{
     float exec(float a, int b) {
         return sin(a) * b;
     }
