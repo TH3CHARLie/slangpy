@@ -448,6 +448,16 @@ struct SGL_API BufferOffsetPair {
     }
 };
 
+namespace detail {
+    inline rhi::BufferOffsetPair to_rhi(const BufferOffsetPair& buffer_with_offset)
+    {
+        return rhi::BufferOffsetPair(
+            buffer_with_offset.buffer ? buffer_with_offset.buffer->rhi_buffer() : nullptr,
+            buffer_with_offset.offset
+        );
+    }
+} // namespace detail
+
 struct SubresourceData {
     const void* data{nullptr};
     size_t size{0};
@@ -592,6 +602,11 @@ public:
     OwnedSubresourceData get_subresource_data(uint32_t layer, uint32_t mip) const;
 
     ref<TextureView> create_view(TextureViewDesc desc);
+
+    /// Get bindless descriptor handle for read access.
+    DescriptorHandle descriptor_handle_ro() const;
+    /// Get bindless descriptor handle for read-write access.
+    DescriptorHandle descriptor_handle_rw() const;
 
     /// Get the shared resource handle.
     /// Note: Texture must be created with the \c TextureUsage::shared usage flag.

@@ -26,7 +26,6 @@ SGL_PY_DECLARE(core_window);
 SGL_PY_DECLARE(device_buffer_cursor);
 SGL_PY_DECLARE(device_child);
 SGL_PY_DECLARE(device_command);
-SGL_PY_DECLARE(device_coopvec);
 SGL_PY_DECLARE(device_device_child);
 SGL_PY_DECLARE(device_device);
 SGL_PY_DECLARE(device_fence);
@@ -134,7 +133,6 @@ NB_MODULE(slangpy_ext, m_)
     SGL_PY_IMPORT(device_shader_cursor);
     SGL_PY_IMPORT(device_surface);
     SGL_PY_IMPORT(device_command);
-    SGL_PY_IMPORT(device_coopvec);
     SGL_PY_IMPORT(device_kernel);
     SGL_PY_IMPORT(device_device);
 
@@ -179,5 +177,8 @@ NB_MODULE(slangpy_ext, m_)
     ));
 
     // Shutdown on module unload.
-    nanobind_module_def_slangpy_ext.m_free = [](void*) { sgl::static_shutdown(); };
+    nanobind_module_def_slangpy_ext.m_free = [](void*)
+    {
+        sgl::static_shutdown();
+    };
 }

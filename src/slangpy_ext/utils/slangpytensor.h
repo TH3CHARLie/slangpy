@@ -113,8 +113,12 @@ public:
         nb::list read_back
     ) const override;
 
-    void read_calldata(CallContext* context, NativeBoundVariableRuntime* binding, nb::object data, nb::object result)
-        const override;
+    void read_calldata(
+        CallContext* context,
+        NativeBoundVariableRuntime* binding,
+        nb::object data,
+        nb::object result
+    ) const override;
 
     nb::object create_output(CallContext* context, NativeBoundVariableRuntime* binding) const override;
 
@@ -137,6 +141,14 @@ private:
         NativeTensor* value,
         nb::list read_back
     ) const;
+
+    void write_pytorch_tensor_fields(
+        CallContext* context,
+        NativeBoundVariableRuntime* binding,
+        ShaderCursor field,
+        TensorRef* tensorref,
+        nb::list read_back
+    ) const;
 };
 
 /// Bare minimum overridable functions to allow python marshall
@@ -152,8 +164,12 @@ struct PyNativeTensorMarshall : public NativeTensorMarshall {
         NB_OVERRIDE(create_calldata, context, binding, data);
     }
 
-    void read_calldata(CallContext* context, NativeBoundVariableRuntime* binding, nb::object data, nb::object result)
-        const override
+    void read_calldata(
+        CallContext* context,
+        NativeBoundVariableRuntime* binding,
+        nb::object data,
+        nb::object result
+    ) const override
     {
         NB_OVERRIDE(read_calldata, context, binding, data, result);
     }

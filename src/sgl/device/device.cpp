@@ -23,6 +23,7 @@
 #include "sgl/device/hot_reload.h"
 #include "sgl/device/debug_logger.h"
 #include "sgl/device/native_handle_traits.h"
+#include "sgl/device/persistent_cache.h"
 
 #include "sgl/core/file_system_watcher.h"
 #include "sgl/core/config.h"
@@ -82,13 +83,21 @@ Device::Device(const DeviceDesc& desc)
 #endif
     }
 
+    // Setup module cache.
+    if (m_desc.module_cache_path) {
+        m_module_cache_path = *m_desc.module_cache_path;
+        if (m_module_cache_path.is_relative())
+            m_module_cache_path = platform::app_data_directory() / m_module_cache_path;
+        std::filesystem::create_directories(m_module_cache_path);
+    }
+
     // Setup shader cache.
     if (m_desc.shader_cache_path) {
-        m_shader_cache_enabled = true;
         m_shader_cache_path = *m_desc.shader_cache_path;
         if (m_shader_cache_path.is_relative())
             m_shader_cache_path = platform::app_data_directory() / m_shader_cache_path;
         std::filesystem::create_directories(m_shader_cache_path);
+        m_persistent_cache = make_ref<PersistentCache>(m_shader_cache_path / "rhi", m_desc.shader_cache_size);
     }
 
     // Invalidate CUDA interop if using CUDA
@@ -102,8 +111,10 @@ Device::Device(const DeviceDesc& desc)
         for (const auto& handle : m_desc.existing_device_handles) {
             if (handle.is_valid()) {
                 m_desc.adapter_luid.reset();
-                log_warn("Both adapter LUID and existing handles have been provided, which are both ways to "
-                         "specify the device. Adapter LUID will be ignored in favor of provided existing handles");
+                log_warn(
+                    "Both adapter LUID and existing handles have been provided, which are both ways to "
+                    "specify the device. Adapter LUID will be ignored in favor of provided existing handles"
+                );
                 break;
             }
         }
@@ -189,6 +200,13 @@ Device::Device(const DeviceDesc& desc)
         .highestShaderModel = 0,
     };
 
+    rhi::BindlessDesc bindless_desc{
+        .bufferCount = m_desc.bindless_options.buffer_count,
+        .textureCount = m_desc.bindless_options.texture_count,
+        .samplerCount = m_desc.bindless_options.sampler_count,
+        .accelerationStructureCount = m_desc.bindless_options.acceleration_structure_count,
+    };
+
     rhi::DeviceDesc rhi_desc{
         .next = &d3d12_extended_desc,
         .deviceType = static_cast<rhi::DeviceType>(m_desc.type),
@@ -202,19 +220,18 @@ Device::Device(const DeviceDesc& desc)
         .slang{
             .slangGlobalSession = m_global_session,
         },
+        // Shader and pipeline cache use the same persistent cache.
+        .persistentShaderCache = m_persistent_cache.get(),
+        .persistentPipelineCache = m_persistent_cache.get(),
         // This needs to match NV_SHADER_EXTN_SLOT set in shader.cpp
         .nvapiExtUavSlot = 999,
         // TODO(slang-rhi) make configurable but default to true
         .enableValidation = true,
         .debugCallback = &DebugLogger::get(),
         .enableCompilationReports = m_desc.enable_compilation_reports,
+        .bindless = bindless_desc,
     };
-    log_debug(
-        "Creating graphics device (type: {}, LUID: {}, shader_cache_path: {}).",
-        m_desc.type,
-        m_desc.adapter_luid,
-        m_shader_cache_path
-    );
+    log_debug("Creating graphics device (type: {}, LUID: {}).", m_desc.type, m_desc.adapter_luid);
     if (SLANG_FAILED(rhi::getRHI()->createDevice(rhi_desc, m_rhi_device.writeRef())))
         SGL_THROW("Failed to create device!");
 
@@ -225,6 +242,7 @@ Device::Device(const DeviceDesc& desc)
     m_info.adapter_name = rhi_device_info.adapterName;
     m_info.adapter_luid = from_rhi(rhi_device_info.adapterLUID);
     m_info.timestamp_frequency = rhi_device_info.timestampFrequency;
+    m_info.optix_version = rhi_device_info.optixVersion;
     m_info.limits.max_texture_dimension_1d = rhi_device_info.limits.maxTextureDimension1D;
     m_info.limits.max_texture_dimension_2d = rhi_device_info.limits.maxTextureDimension2D;
     m_info.limits.max_texture_dimension_3d = rhi_device_info.limits.maxTextureDimension3D;
@@ -288,6 +306,21 @@ Device::Device(const DeviceDesc& desc)
     }
     log_debug("Supported features: {}", string::join(feature_names, ", "));
 
+    // Query capabilities.
+    {
+        uint32_t rhi_capability_count = 0;
+        SLANG_RHI_CALL(m_rhi_device->getCapabilities(&rhi_capability_count, nullptr));
+        std::vector<rhi::Capability> rhi_capabilities(rhi_capability_count);
+        SLANG_RHI_CALL(m_rhi_device->getCapabilities(&rhi_capability_count, rhi_capabilities.data()));
+        for (rhi::Capability rhi_capability : rhi_capabilities) {
+            std::string capability_name = rhi::getRHI()->getCapabilityName(rhi_capability);
+            SlangCapabilityID slang_capability = m_global_session->findCapability(capability_name.c_str());
+            if (slang_capability != SLANG_CAPABILITY_UNKNOWN)
+                m_slang_capabilities.push_back(slang_capability);
+            m_capabilities.push_back(std::move(capability_name));
+        }
+    }
+
     // Create graphics queue.
     SLANG_RHI_CALL(m_rhi_device->getQueue(rhi::QueueType::Graphics, m_rhi_graphics_queue.writeRef()));
 
@@ -319,7 +352,7 @@ Device::Device(const DeviceDesc& desc)
     m_slang_session = create_slang_session({
         .compiler_options = m_desc.compiler_options,
         .add_default_include_paths = true,
-        .cache_path = m_shader_cache_enabled ? std::optional(m_shader_cache_path) : std::nullopt,
+        .cache_path = !m_module_cache_path.empty() ? std::optional(m_module_cache_path) : std::nullopt,
     });
 
     // Add device to global device list.
@@ -354,17 +387,26 @@ void Device::_release_rhi_resources()
 
 ShaderCacheStats Device::shader_cache_stats() const
 {
-    // TODO: revisit when we add a shader cache.
-    return {
-        .entry_count = 0,
-        .hit_count = 0,
-        .miss_count = 0,
-    };
+    if (m_persistent_cache) {
+        PersistentCacheStats stats = m_persistent_cache->stats();
+        return {
+            .entry_count = stats.entry_count,
+            .hit_count = stats.hit_count,
+            .miss_count = stats.miss_count,
+        };
+    } else {
+        return {};
+    }
 }
 
 bool Device::has_feature(Feature feature) const
 {
     return m_rhi_device->hasFeature(static_cast<rhi::Feature>(feature));
+}
+
+bool Device::has_capability(std::string_view capability) const
+{
+    return std::find(m_capabilities.begin(), m_capabilities.end(), capability) != m_capabilities.end();
 }
 
 FormatSupport Device::get_format_support(Format format) const
@@ -402,7 +444,6 @@ void Device::close()
 
     m_slang_session.reset();
     m_hot_reload.reset();
-    m_coop_vec.reset();
 
     if (m_cuda_device) {
         SGL_CU_SCOPE(this);
@@ -512,16 +553,102 @@ ref<ShaderTable> Device::create_shader_table(ShaderTableDesc desc)
     return make_ref<ShaderTable>(ref<Device>(this), std::move(desc));
 }
 
-/*size_t Device::query_coopvec_matrix_size(uint32_t rows, uint32_t columns, CoopVecMatrixLayout layout)
+size_t Device::get_coop_vec_matrix_size(
+    uint32_t rows,
+    uint32_t cols,
+    CoopVecMatrixLayout layout,
+    DataType element_type,
+    size_t row_col_stride
+)
 {
-    return m_coop_vec->query_matrix_size(rows, columns, layout);
-}*/
+    size_t size = 0;
+    SLANG_RHI_CALL(m_rhi_device->getCooperativeVectorMatrixSize(
+        rows,
+        cols,
+        detail::to_rhi_cooperative_vector_component_type(element_type),
+        static_cast<rhi::CooperativeVectorMatrixLayout>(layout),
+        row_col_stride,
+        &size
+    ));
+    return size;
+}
 
-ref<CoopVec> Device::get_or_create_coop_vec()
+CoopVecMatrixDesc Device::create_coop_vec_matrix_desc(
+    uint32_t rows,
+    uint32_t cols,
+    CoopVecMatrixLayout layout,
+    DataType element_type,
+    size_t offset,
+    size_t row_col_stride
+)
 {
-    if (!m_coop_vec)
-        m_coop_vec.reset(new CoopVec(ref<Device>(this)));
-    return m_coop_vec;
+    if (row_col_stride == 0)
+        row_col_stride = detail::compute_coop_vec_row_col_stride(rows, cols, element_type, layout);
+
+    CoopVecMatrixDesc result;
+    result.rows = rows;
+    result.cols = cols;
+    result.layout = layout;
+    result.element_type = element_type;
+    result.size = get_coop_vec_matrix_size(rows, cols, layout, element_type, row_col_stride);
+    result.offset = offset;
+    result.row_col_stride = row_col_stride;
+    return result;
+}
+
+void Device::convert_coop_vec_matrices(
+    void* dst,
+    size_t dst_size,
+    std::span<const CoopVecMatrixDesc> dst_descs,
+    const void* src,
+    size_t src_size,
+    std::span<const CoopVecMatrixDesc> src_descs
+)
+{
+    SGL_CHECK_NOT_NULL(dst);
+    SGL_CHECK_GT(dst_size, 0);
+    SGL_CHECK_NOT_NULL(src);
+    SGL_CHECK_GT(src_size, 0);
+    SGL_CHECK(src_descs.size() == dst_descs.size(), "Source and destination desc count must match.");
+
+    short_vector<rhi::CooperativeVectorMatrixDesc, 8> rhi_dst_descs;
+    rhi_dst_descs.reserve(dst_descs.size());
+    for (const CoopVecMatrixDesc& desc : dst_descs)
+        rhi_dst_descs.push_back(detail::to_rhi(desc));
+
+    short_vector<rhi::CooperativeVectorMatrixDesc, 8> rhi_src_descs;
+    rhi_src_descs.reserve(src_descs.size());
+    for (const CoopVecMatrixDesc& desc : src_descs)
+        rhi_src_descs.push_back(detail::to_rhi(desc));
+
+    SLANG_RHI_CALL(m_rhi_device->convertCooperativeVectorMatrix(
+        dst,
+        dst_size,
+        rhi_dst_descs.data(),
+        src,
+        src_size,
+        rhi_src_descs.data(),
+        narrow_cast<uint32_t>(rhi_dst_descs.size())
+    ));
+}
+
+void Device::convert_coop_vec_matrix(
+    void* dst,
+    size_t dst_size,
+    const CoopVecMatrixDesc& dst_desc,
+    const void* src,
+    size_t src_size,
+    const CoopVecMatrixDesc& src_desc
+)
+{
+    convert_coop_vec_matrices(
+        dst,
+        dst_size,
+        std::span<const CoopVecMatrixDesc>(&dst_desc, 1),
+        src,
+        src_size,
+        std::span<const CoopVecMatrixDesc>(&src_desc, 1)
+    );
 }
 
 ref<SlangSession> Device::create_slang_session(SlangSessionDesc desc)
@@ -1037,8 +1164,10 @@ bool Device::enable_agility_sdk()
     D3D12GetInterfaceFn pD3D12GetInterface
         = handle ? (D3D12GetInterfaceFn)GetProcAddress(handle, "D3D12GetInterface") : nullptr;
     if (!pD3D12GetInterface) {
-        log_warn("Cannot enable D3D12 Agility SDK: "
-                 "Failed to get D3D12GetInterface.");
+        log_warn(
+            "Cannot enable D3D12 Agility SDK: "
+            "Failed to get D3D12GetInterface."
+        );
         return false;
     }
 
@@ -1049,15 +1178,19 @@ bool Device::enable_agility_sdk()
     _COM_SMARTPTR_TYPEDEF(ID3D12SDKConfiguration, __uuidof(ID3D12SDKConfiguration));
     ID3D12SDKConfigurationPtr pD3D12SDKConfiguration;
     if (!SUCCEEDED(pD3D12GetInterface(CLSID_D3D12SDKConfiguration__, IID_PPV_ARGS(&pD3D12SDKConfiguration)))) {
-        log_warn("Cannot enable D3D12 Agility SDK: "
-                 "Failed to get D3D12SDKConfiguration interface.");
+        log_warn(
+            "Cannot enable D3D12 Agility SDK: "
+            "Failed to get D3D12SDKConfiguration interface."
+        );
         return false;
     }
 
     // Set the SDK version and path.
     if (!SUCCEEDED(pD3D12SDKConfiguration->SetSDKVersion(SLANG_RHI_AGILITY_SDK_VERSION, rel_path.string().c_str()))) {
-        log_warn("Cannot enable D3D12 Agility SDK: "
-                 "Calling SetSDKVersion failed.");
+        log_warn(
+            "Cannot enable D3D12 Agility SDK: "
+            "Calling SetSDKVersion failed."
+        );
         return false;
     }
 
@@ -1079,7 +1212,7 @@ std::string Device::to_string() const
         "  enable_hot_reload = {},\n"
         "  enable_compilation_reports = {},\n"
         "  supported_shader_model = {},\n"
-        "  shader_cache_enabled = {},\n"
+        "  module_cache_path = \"{}\",\n"
         "  shader_cache_path = \"{}\"\n"
         ")",
         m_info.type,
@@ -1091,7 +1224,7 @@ std::string Device::to_string() const
         m_desc.enable_hot_reload,
         m_desc.enable_compilation_reports,
         m_supported_shader_model,
-        m_shader_cache_enabled,
+        m_module_cache_path,
         m_shader_cache_path
     );
 }
