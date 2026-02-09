@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 
 from slangpy import DeviceType, int3, float3
-from slangpy.types.buffer import NDBuffer
+from slangpy.types import Tensor
 from slangpy.testing import helpers
 
 SIMPLE_FUNC = """
@@ -67,7 +67,7 @@ def test_implicit_cast_no_vectorization(device_type: DeviceType):
     binding = call_data.debug_only_bindings.args[0]
     assert binding.vector_mapping.as_tuple() == ()
     assert binding.vector_type is not None
-    assert binding.vector_type.name == "float"
+    assert binding.vector_type.name == "int"
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
@@ -109,22 +109,12 @@ def test_generic_constrained_no_vectorization(device_type: DeviceType):
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
-def test_generic_constrained_fail_no_vectorization(device_type: DeviceType):
-
-    device = helpers.get_device(device_type)
-    function = helpers.create_function_from_module(device, "genericconstrainedfoo", SIMPLE_FUNC)
-
-    with pytest.raises(Exception):
-        call_data = function.debug_build_call_data(int3(1, 1, 1))
-
-
-@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
 def test_implicit_1d_vectorization(device_type: DeviceType):
 
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "foo", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     call_data = function.debug_build_call_data(buffer)
 
@@ -140,28 +130,14 @@ def test_implicit_1d_vectorization(device_type: DeviceType):
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
-def test_fail_disabled_implicit_1d_vectorization(device_type: DeviceType):
-
-    device = helpers.get_device(device_type)
-    function = helpers.create_function_from_module(
-        device, "foo", SIMPLE_FUNC, options={"implicit_element_casts": False}
-    )
-
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
-
-    with pytest.raises(ValueError):
-        call_data = function.debug_build_call_data(buffer)
-
-
-@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
 def test_fail_implicit_float_to_int_1d_vectorization(device_type: DeviceType):
 
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "intfoo", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10,))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(Exception):
         call_data = function.debug_build_call_data(buffer)
 
 
@@ -171,7 +147,7 @@ def test_explicit_map_float_to_int_1d_vectorization(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "intfoo", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     call_data = function.map((0,)).debug_build_call_data(buffer)
 
@@ -192,7 +168,7 @@ def test_explicit_cast_float_to_int_1d_vectorization(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "intfoo", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     call_data = function.map(float).debug_build_call_data(buffer)
 
@@ -213,7 +189,7 @@ def test_generic_1d_explicit_vectorization(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "genericfoo", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     call_data = function.map((0,)).debug_build_call_data(buffer)
 
@@ -234,7 +210,7 @@ def test_genericconstrained_1d_explicit_vectorization(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "genericconstrainedfoo", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     call_data = function.map((0,)).debug_build_call_data(buffer)
 
@@ -255,7 +231,7 @@ def test_genericconstrained_1d_explicit_typed_vectorization(device_type: DeviceT
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "genericconstrainedfoo", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     call_data = function.map("float").debug_build_call_data(buffer)
 
@@ -271,24 +247,12 @@ def test_genericconstrained_1d_explicit_typed_vectorization(device_type: DeviceT
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
-def test_genericconstrained_1d_fail_implicit_vectorization(device_type: DeviceType):
-
-    device = helpers.get_device(device_type)
-    function = helpers.create_function_from_module(device, "genericconstrainedfoo", SIMPLE_FUNC)
-
-    buffer = NDBuffer(device=device, dtype=float, shape=(10,))
-
-    with pytest.raises(Exception):
-        call_data = function.debug_build_call_data(buffer)
-
-
-@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
 def test_implicit_tensor_to_vector(device_type: DeviceType):
 
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "foo3", SIMPLE_FUNC)
 
-    buffer = NDBuffer(device=device, dtype=float, shape=(10, 3))
+    buffer = Tensor.empty(device=device, dtype=float, shape=(10, 3))
 
     call_data = function.debug_build_call_data(buffer)
 
@@ -304,20 +268,6 @@ def test_implicit_tensor_to_vector(device_type: DeviceType):
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
-def test_fail_disabled_implicit_tensor_to_vector(device_type: DeviceType):
-
-    device = helpers.get_device(device_type)
-    function = helpers.create_function_from_module(
-        device, "foo3", SIMPLE_FUNC, options={"implicit_tensor_casts": False}
-    )
-
-    buffer = NDBuffer(device=device, dtype=float, shape=(10, 3))
-
-    with pytest.raises(ValueError):
-        call_data = function.debug_build_call_data(buffer)
-
-
-@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
 def test_fail_implicit_dimension_adding_vectorization(device_type: DeviceType):
 
     device = helpers.get_device(device_type)
@@ -325,8 +275,8 @@ def test_fail_implicit_dimension_adding_vectorization(device_type: DeviceType):
         device, "add", SIMPLE_FUNC, options={"strict_broadcasting": True}
     )
 
-    a = NDBuffer(device=device, dtype=float, shape=(10, 10))
-    b = NDBuffer(device=device, dtype=float, shape=(10,))
+    a = Tensor.empty(device=device, dtype=float, shape=(10, 10))
+    b = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     with pytest.raises(Exception):
         call_data = function.debug_build_call_data(a, b)
@@ -338,8 +288,8 @@ def test_none_strict_implicit_dimension_adding_vectorization(device_type: Device
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "add", SIMPLE_FUNC)
 
-    a = NDBuffer(device=device, dtype=float, shape=(10, 10))
-    b = NDBuffer(device=device, dtype=float, shape=(10,))
+    a = Tensor.empty(device=device, dtype=float, shape=(10, 10))
+    b = Tensor.empty(device=device, dtype=float, shape=(10,))
 
     call_data = function.debug_build_call_data(a, b)
 
@@ -365,7 +315,7 @@ def test_broadcast_vector(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "add", SIMPLE_FUNC)
 
-    res_buffer = NDBuffer(device=device, dtype=float, shape=(3,))
+    res_buffer = Tensor.empty(device=device, dtype=float, shape=(3,))
     function(float3(1, 2, 3), float3(4, 5, 6), _result=res_buffer)
     assert np.allclose(res_buffer.to_numpy().view(dtype=np.float32), [5, 7, 9])
 

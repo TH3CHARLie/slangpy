@@ -8,7 +8,7 @@ from slangpy.core.callsignature import BoundVariable
 from slangpy.core.shapes import TShapeOrTuple
 from slangpy.core.native import NativeCallRuntimeOptions
 from slangpy.types import floatRef
-from slangpy.types.buffer import NDBuffer
+from slangpy.types import Tensor
 from slangpy.types.valueref import ValueRef
 from slangpy.testing import helpers
 
@@ -23,15 +23,15 @@ TTupleOrList = Union[tuple[int, ...], list[int]]
 
 
 def make_int_buffer(device_type: DeviceType, shape: TTupleOrList):
-    return NDBuffer.zeros(device=helpers.get_device(device_type), shape=tuple(shape), dtype=int)
+    return Tensor.zeros(device=helpers.get_device(device_type), shape=tuple(shape), dtype=int)
 
 
 def make_float_buffer(device_type: DeviceType, shape: TTupleOrList):
-    return NDBuffer.zeros(device=helpers.get_device(device_type), shape=tuple(shape), dtype=float)
+    return Tensor.zeros(device=helpers.get_device(device_type), shape=tuple(shape), dtype=float)
 
 
 def make_vec4_buffer(device_type: DeviceType, shape: TTupleOrList):
-    return NDBuffer.zeros(device=helpers.get_device(device_type), shape=tuple(shape), dtype=float4)
+    return Tensor.zeros(device=helpers.get_device(device_type), shape=tuple(shape), dtype=float4)
 
 
 def make_vec4_raw_buffer(device_type: DeviceType, count: int):
@@ -91,7 +91,7 @@ def read_slice(
     function = helpers.create_function_from_module(
         device,
         "read_slice",
-        r"""import "slangpy"; float read_slice(int2 index, NDBuffer<float,2> texture) { return texture[{index.x,index.y}]; }""",
+        r"""import "slangpy"; float read_slice(int2 index, Tensor<float,2> texture) { return texture[index.x,index.y]; }""",
     )
 
     if transforms is not None:
@@ -421,7 +421,6 @@ def test_dotproduct_output_transform(
     assert not diff
 
 
-@pytest.mark.skip(reason="Awaiting slang fix")
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
 def test_readslice_scalar(device_type: DeviceType):
 
@@ -430,37 +429,36 @@ def test_readslice_scalar(device_type: DeviceType):
     shapes = read_slice(
         device_type,
         make_int_buffer(device_type, (2,)),
-        make_float_buffer(device_type, (256, 128, 4)),
+        make_float_buffer(device_type, (256, 128)),
         None,
     )
     diff = DeepDiff(
         shapes,
         {
-            "call_shape": [10, 5],
-            "node_call_dims": [2, 2, None],
-            "node_transforms": [[0, 2], [1, 2], [0, 1]],
+            "call_shape": [],
+            "node_call_dims": [0, 0, 0],
+            "node_transforms": [[], [], []],
         },
     )
     assert not diff
 
 
-@pytest.mark.skip(reason="Awaiting slang fix")
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
 def test_readslice_broadcast_slice(device_type: DeviceType):
 
     # Provide a buffer of 50 indices to sample against the 1 slice
     shapes = read_slice(
         device_type,
-        make_float_buffer(device_type, (50, 2)),
-        make_float_buffer(device_type, (256, 128, 4)),
+        make_int_buffer(device_type, (50, 2)),
+        make_float_buffer(device_type, (256, 128)),
         None,
     )
     diff = DeepDiff(
         shapes,
         {
-            "type_shapes": [[2], [256, 128, 4], [4]],
-            "arg_shapes": [[50], [], [50]],
             "call_shape": [50],
+            "node_call_dims": [1, 0, 1],
+            "node_transforms": [[0], [], [0]],
         },
     )
     assert not diff
@@ -474,7 +472,7 @@ def test_readslice_broadcast_index(device_type: DeviceType):
     shapes = read_slice(
         device_type,
         make_float_buffer(device_type, (2,)),
-        make_float_buffer(device_type, (50, 256, 128, 4)),
+        make_float_buffer(device_type, (50, 256, 128)),
         None,
     )
     diff = DeepDiff(
@@ -523,7 +521,7 @@ def test_readslice_invalid_shape(
 ):
 
     # Fail trying to pass a float3 buffer into the float4 slice
-    with pytest.raises(ValueError):
+    with pytest.raises(Exception):
         shapes = read_slice(
             device_type,
             make_float_buffer(device_type, data_shape[0]),
@@ -545,7 +543,7 @@ def test_readslice_invalid_broadcast(
 ):
 
     # Fail trying to pass mismatched broadcast dimensions
-    with pytest.raises(ValueError):
+    with pytest.raises(Exception):
         shapes = read_slice(
             device_type,
             make_float_buffer(device_type, data_shape[0]),

@@ -1,6 +1,8 @@
 
 add_library(sgl SHARED)
 
+option(SGL_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
+
 target_sources(sgl PRIVATE
     sgl.natvis
 
@@ -116,6 +118,7 @@ target_sources(sgl PRIVATE
     device/reflection.h
     device/resource.cpp
     device/resource.h
+    device/rhi.slang
     device/sampler.cpp
     device/sampler.h
     device/shader_cursor.cpp
@@ -155,6 +158,8 @@ target_sources(sgl PRIVATE
     ui/widgets.cpp
     ui/widgets.h
 
+    utils/crashpad.cpp
+    utils/crashpad.h
     utils/renderdoc.cpp
     utils/renderdoc.h
     utils/slangpy.cpp
@@ -199,7 +204,7 @@ target_compile_options(sgl
             /MP                             # enable multi-processor compilation
             /Zi                             # generate debug symbols
             # Configure warnings
-            /WX                             # warnings as errors
+            $<$<BOOL:${SGL_WARNINGS_AS_ERRORS}>:/WX>    # warnings as errors
             /W4                             # increase warning level
             /wd4251                         # 'type' : class 'type1' needs to have dll-interface to be used by clients of class 'type2'
             /wd4201                         # nonstandard extension used: nameless struct/union
@@ -220,7 +225,7 @@ target_compile_options(sgl
             -fvisibility=hidden             # hide symbols by default
             -Wall                           # set warning level
             -Wextra                         # enable extra warnings
-            -Werror                         # treat warnings as errors
+            $<$<BOOL:${SGL_WARNINGS_AS_ERRORS}>:-Werror>    # treat warnings as errors
             -Wno-unused-function
             -Wno-unused-variable
             -Wno-unused-but-set-variable
@@ -238,6 +243,7 @@ target_compile_options(sgl
             -Wno-self-assign-overloaded
             -Wno-deprecated-copy
             -Wno-microsoft-cast
+            -Wno-cast-function-type-mismatch
 
             # this is for ImGUI only
             -Wno-nontrivial-memcall
@@ -346,6 +352,7 @@ file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${SGL_BUILD_TYPE}/include/sgl/c
 #define SGL_HAS_LIBPNG $<BOOL:${SGL_HAS_LIBPNG}>
 #define SGL_HAS_OPENEXR $<BOOL:${SGL_HAS_OPENEXR}>
 #define SGL_HAS_ASMJIT $<BOOL:${SGL_HAS_ASMJIT}>
+#define SGL_HAS_CRASHPAD $<BOOL:${SGL_HAS_CRASHPAD}>
 "
 )
 target_include_directories(sgl PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/${SGL_BUILD_TYPE}/include)
@@ -370,6 +377,7 @@ target_link_libraries(sgl
         $<$<BOOL:${SGL_HAS_LIBJPEG}>:JPEG::JPEG>
         $<$<BOOL:${SGL_HAS_OPENEXR}>:OpenEXR::OpenEXR>
         $<$<BOOL:${SGL_HAS_ASMJIT}>:asmjit::asmjit>
+        $<$<BOOL:${SGL_HAS_CRASHPAD}>:crashpad::crashpad>
         # Windows system libraries.
         $<$<PLATFORM_ID:Windows>:Dbghelp>
         # $<$<PLATFORM_ID:Windows>:shcore.lib>

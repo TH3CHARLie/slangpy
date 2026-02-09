@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 
 from slangpy import DeviceType, TypeReflection
-from slangpy.types.buffer import NDBuffer
+from slangpy.types import Tensor
 from slangpy.types.tensor import Tensor
 from slangpy.testing import helpers
 
@@ -31,25 +31,26 @@ def do_generic_test(
     buffertype = module.layout.find_type_by_name(buffer_type_name)
 
     if container_type == "buffer":
-        buffer = NDBuffer(device, dtype=buffertype, shape=shape)
-        if buffer.cursor().element_type_layout.kind == TypeReflection.Kind.vector:
-            helpers.write_ndbuffer_from_numpy(
-                buffer,
-                np.random.random(int(buffer.storage.size / 4)).astype(np.float32),
-            )
-        else:
-            buffer.copy_from_numpy(
-                np.random.random(int(buffer.storage.size / 4)).astype(np.float32)
-            )
+        buffer = Tensor.empty(device, shape=shape, dtype=buffertype)
+        buffer.copy_from_numpy(np.random.random(int(buffer.storage.size / 4)).astype(np.float32))
 
         results = module.get(buffer)
         assert results.dtype == buffer.dtype
         assert np.all(buffer.to_numpy() == results.to_numpy())
     elif container_type == "tensor":
         tensor = Tensor.empty(device, dtype=buffertype, shape=shape)
+        tensor.copy_from_numpy(np.random.random(int(tensor.storage.size / 4)).astype(np.float32))
+
         results = module.get(tensor, _result="tensor")
         assert results.dtype == tensor.dtype
-        assert np.all(tensor.to_numpy() == results.to_numpy())
+        src_numpy = tensor.to_numpy()
+        dst_numpy = results.to_numpy()
+        if not np.all(src_numpy == dst_numpy):
+            print("Source:", src_numpy)
+            print("Dest:", dst_numpy)
+            print("Close:", np.allclose(src_numpy, dst_numpy))
+            print("Diff:", src_numpy - dst_numpy)
+            assert np.all(src_numpy == dst_numpy)
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)

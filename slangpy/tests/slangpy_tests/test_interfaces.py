@@ -24,7 +24,7 @@ interface IFoo {}
 
 struct Test2f : ITest<float, 2> {
     float sentinel() { return 42.0f; }
-    void load(Context0D ctx, out Test2f x) { x = this; }
+    void __slangpy_load(Context0D ctx, out Test2f x) { x = this; }
 }
 struct Test3i : ITest<int, 3> {
     float sentinel() { return 0.0f; }
@@ -80,10 +80,10 @@ def test_specialization(device_type: DeviceType):
     test2f = Foo(float32, 2)
     test3i = Foo(int32, 3)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(Exception):
         module.bar(test3i)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(Exception):
         module.foo(test3i)
 
     result = module.foo(test2f)

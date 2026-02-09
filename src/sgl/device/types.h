@@ -61,7 +61,9 @@ enum class Feature : uint32_t {
     ray_tracing = static_cast<uint32_t>(rhi::Feature::RayTracing),
     ray_query = static_cast<uint32_t>(rhi::Feature::RayQuery),
     shader_execution_reordering = static_cast<uint32_t>(rhi::Feature::ShaderExecutionReordering),
+    ray_tracing_motion_blur = static_cast<uint32_t>(rhi::Feature::RayTracingMotionBlur),
     ray_tracing_validation = static_cast<uint32_t>(rhi::Feature::RayTracingValidation),
+    cluster_acceleration_structure = static_cast<uint32_t>(rhi::Feature::ClusterAccelerationStructure),
     // Other features
     timestamp_query = static_cast<uint32_t>(rhi::Feature::TimestampQuery),
     realtime_clock = static_cast<uint32_t>(rhi::Feature::RealtimeClock),
@@ -131,7 +133,9 @@ SGL_ENUM_INFO(
         {Feature::ray_tracing, "ray_tracing"},
         {Feature::ray_query, "ray_query"},
         {Feature::shader_execution_reordering, "shader_execution_reordering"},
+        {Feature::ray_tracing_motion_blur, "ray_tracing_motion_blur"},
         {Feature::ray_tracing_validation, "ray_tracing_validation"},
+        {Feature::cluster_acceleration_structure, "cluster_acceleration_structure"},
         {Feature::timestamp_query, "timestamp_query"},
         {Feature::realtime_clock, "realtime_clock"},
         {Feature::cooperative_vector, "cooperative_vector"},
@@ -148,7 +152,7 @@ SGL_ENUM_INFO(
         {Feature::sm_6_8, "sm_6_8"},
         {Feature::sm_6_9, "sm_6_9"},
         {Feature::half, "half"},
-        {Feature::double_, "double_"},
+        {Feature::double_, "double"},
         {Feature::int16, "int16"},
         {Feature::int64, "int64"},
         {Feature::atomic_float, "atomic_float"},
@@ -176,6 +180,7 @@ enum class DescriptorHandleType {
     texture = static_cast<uint32_t>(rhi::DescriptorHandleType::Texture),
     rw_texture = static_cast<uint32_t>(rhi::DescriptorHandleType::RWTexture),
     sampler = static_cast<uint32_t>(rhi::DescriptorHandleType::Sampler),
+    combined_texture_sampler = static_cast<uint32_t>(rhi::DescriptorHandleType::CombinedTextureSampler),
     acceleration_structure = static_cast<uint32_t>(rhi::DescriptorHandleType::AccelerationStructure),
 };
 
@@ -188,6 +193,7 @@ SGL_ENUM_INFO(
         {DescriptorHandleType::texture, "texture"},
         {DescriptorHandleType::rw_texture, "rw_texture"},
         {DescriptorHandleType::sampler, "sampler"},
+        {DescriptorHandleType::combined_texture_sampler, "combined_texture_sampler"},
         {DescriptorHandleType::acceleration_structure, "acceleration_structure"},
     }
 );
@@ -834,6 +840,10 @@ namespace detail {
             return rhi::CooperativeVectorComponentType::Float32;
         case DataType::float64:
             return rhi::CooperativeVectorComponentType::Float64;
+        case DataType::float8_e4m3:
+            return rhi::CooperativeVectorComponentType::FloatE4M3;
+        case DataType::float8_e5m2:
+            return rhi::CooperativeVectorComponentType::FloatE5M2;
         case DataType::int8:
             return rhi::CooperativeVectorComponentType::Sint8;
         case DataType::int16:

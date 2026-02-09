@@ -8,6 +8,7 @@ if(SGL_BUILD_TESTS)
     target_sources(sgl_tests PRIVATE
         sgl/sgl_tests.cpp
         sgl/testing.cpp
+        sgl/core/test_block_allocator.cpp
         sgl/core/test_dds_file.cpp
         sgl/core/test_enum.cpp
         sgl/core/test_file_system_watcher.cpp
@@ -21,6 +22,7 @@ if(SGL_BUILD_TESTS)
         sgl/core/test_static_vector.cpp
         sgl/core/test_stream.cpp
         sgl/core/test_string.cpp
+        sgl/device/test_cursors.cpp
         sgl/device/test_device.cpp
         sgl/device/test_hot_reload.cpp
         sgl/device/test_formats.cpp
