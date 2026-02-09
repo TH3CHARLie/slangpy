@@ -28,22 +28,6 @@ struct SourceImage {
     Format format{Format::undefined};
 };
 
-inline ref<Bitmap> convert_ya_to_rg(const Bitmap* ya_bitmap)
-{
-    SGL_ASSERT(ya_bitmap->pixel_format() == Bitmap::PixelFormat::ya);
-
-    ref<Bitmap> rg_bitmap = make_ref<Bitmap>(
-        Bitmap::PixelFormat::rg,
-        ya_bitmap->component_type(),
-        ya_bitmap->width(),
-        ya_bitmap->height()
-    );
-    rg_bitmap->set_srgb_gamma(ya_bitmap->srgb_gamma());
-    std::memcpy(rg_bitmap->data(), ya_bitmap->data(), ya_bitmap->buffer_size());
-
-    return rg_bitmap;
-}
-
 /**
  * \brief Determine the texture format given a bitmap.
  *
@@ -158,14 +142,10 @@ determine_texture_format(Device* device, const Bitmap* bitmap, const TextureLoad
         }
     }
 
-    // Handle YA bitmap based on ya_handling option.
+    // If format is greyscale with alpha, we must convert to rgba
     if (pixel_format == PixelFormat::ya) {
-        if (options.ya_handling == YAHandling::expand_to_rgba) {
-            pixel_format = PixelFormat::rgba;
-            convert_to_rgba = true;
-        } else {
-            pixel_format = PixelFormat::rg;
-        }
+        pixel_format = PixelFormat::rgba;
+        convert_to_rgba = true;
     }
 
     // Use sRGB format if requested and supported.
@@ -205,20 +185,11 @@ inline std::pair<TextureType, uint32_t> get_texture_type_and_layer_count(DDSFile
 
 inline SourceImage convert_bitmap(Device* device, ref<Bitmap> bitmap, const TextureLoader::Options& options)
 {
-    using PixelFormat = Bitmap::PixelFormat;
-
     auto [format, convert_to_rgba] = determine_texture_format(device, bitmap, options);
-
-    if (bitmap->pixel_format() == PixelFormat::ya && options.ya_handling == YAHandling::preserve_as_rg) {
-        return SourceImage{
-            .bitmap = convert_ya_to_rg(bitmap),
-            .format = format,
-        };
-    }
-
     return SourceImage{
-        .bitmap
-        = convert_to_rgba ? bitmap->convert(PixelFormat::rgba, bitmap->component_type(), bitmap->srgb_gamma()) : bitmap,
+        .bitmap = convert_to_rgba
+            ? bitmap->convert(Bitmap::PixelFormat::rgba, bitmap->component_type(), bitmap->srgb_gamma())
+            : bitmap,
         .format = format,
     };
 }
@@ -319,21 +290,21 @@ inline ref<Texture> create_texture(
     }
 }
 
+
 inline std::vector<ref<Texture>> create_textures(
     Device* device,
     Blitter* blitter,
     std::span<SourceImage> source_images,
     std::span<thread::TaskHandle> source_image_tasks,
-    std::span<const TextureLoader::Options> options
+    const TextureLoader::Options& options
 )
 {
     SGL_ASSERT(source_images.size() == source_image_tasks.size());
-    SGL_ASSERT(source_images.size() == options.size());
     std::vector<ref<Texture>> textures(source_images.size());
     ref<CommandEncoder> command_encoder = device->create_command_encoder();
     for (size_t i = 0; i < source_images.size(); ++i) {
         thread::task_wait_and_release(source_image_tasks[i]);
-        textures[i] = create_texture(device, blitter, command_encoder, source_images[i], options[i]);
+        textures[i] = create_texture(device, blitter, command_encoder, source_images[i], options);
         if (i && (i % BATCH_SIZE == 0)) {
             device->submit_command_buffer(command_encoder->finish());
             command_encoder = device->create_command_encoder();
@@ -445,14 +416,7 @@ ref<Texture> TextureLoader::load_texture(const std::filesystem::path& path, std:
 std::vector<ref<Texture>>
 TextureLoader::load_textures(std::span<const Bitmap*> bitmaps, std::optional<Options> options_)
 {
-    std::vector<Options> options(bitmaps.size(), options_.value_or(Options{}));
-    return load_textures(bitmaps, options);
-}
-
-std::vector<ref<Texture>>
-TextureLoader::load_textures(std::span<const Bitmap*> bitmaps, std::span<const Options> options)
-{
-    SGL_CHECK(bitmaps.size() == options.size(), "Number of options must be equal to the number of bitmaps");
+    Options options = options_.value_or(Options{});
 
     // Convert bitmaps in parallel.
     std::vector<SourceImage> source_images(bitmaps.size());
@@ -461,7 +425,7 @@ TextureLoader::load_textures(std::span<const Bitmap*> bitmaps, std::span<const O
         source_image_tasks[i] = thread::do_async(
             [&, i]()
             {
-                source_images[i] = convert_bitmap(m_device, ref(const_cast<Bitmap*>(bitmaps[i])), options[i]);
+                source_images[i] = convert_bitmap(m_device, ref(const_cast<Bitmap*>(bitmaps[i])), options);
             }
         );
     }
@@ -470,16 +434,9 @@ TextureLoader::load_textures(std::span<const Bitmap*> bitmaps, std::span<const O
 }
 
 std::vector<ref<Texture>>
-TextureLoader::load_textures(std::span<const std::filesystem::path> paths, std::optional<Options> options_)
+TextureLoader::load_textures(std::span<std::filesystem::path> paths, std::optional<Options> options_)
 {
-    std::vector<Options> options(paths.size(), options_.value_or(Options{}));
-    return load_textures(paths, options);
-}
-
-std::vector<ref<Texture>>
-TextureLoader::load_textures(std::span<const std::filesystem::path> paths, std::span<const Options> options)
-{
-    SGL_CHECK(paths.size() == options.size(), "Number of options must be equal to the number of paths");
+    Options options = options_.value_or(Options{});
 
     // Load & convert source images in parallel.
     std::vector<SourceImage> source_images(paths.size());
@@ -488,7 +445,7 @@ TextureLoader::load_textures(std::span<const std::filesystem::path> paths, std::
         source_image_tasks[i] = thread::do_async(
             [&, i]()
             {
-                source_images[i] = load_and_convert_source_image(m_device, paths[i], options[i]);
+                source_images[i] = load_and_convert_source_image(m_device, paths[i], options);
             }
         );
     }
@@ -518,8 +475,7 @@ ref<Texture> TextureLoader::load_texture_array(std::span<const Bitmap*> bitmaps,
     return create_texture_array(m_device, m_blitter, source_images, source_image_tasks, options);
 }
 
-ref<Texture>
-TextureLoader::load_texture_array(std::span<const std::filesystem::path> paths, std::optional<Options> options_)
+ref<Texture> TextureLoader::load_texture_array(std::span<std::filesystem::path> paths, std::optional<Options> options_)
 {
     if (paths.empty())
         return nullptr;

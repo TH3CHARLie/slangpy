@@ -62,9 +62,6 @@ set_target_properties(nanothread PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE
 add_library(lmdb STATIC)
 target_include_directories(lmdb INTERFACE lmdb)
 target_sources(lmdb PRIVATE lmdb/mdb.c lmdb/midl.c)
-target_compile_definitions(lmdb PRIVATE _CRT_SECURE_NO_WARNINGS)
-target_compile_options(lmdb PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4333 /wd4172>)
-target_compile_options(lmdb PRIVATE $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:GNU>>:-Wno-deprecated-declarations>)
 
 # slang
 
@@ -74,9 +71,8 @@ set(SGL_LOCAL_SLANG ON CACHE BOOL "Use a local build of slang instead of downloa
 set(SGL_LOCAL_SLANG_DIR "/home/xuanday/dev/slang" CACHE PATH "Path to a local slang build")
 set(SGL_LOCAL_SLANG_BUILD_DIR "build/Release" CACHE STRING "Build directory of the local slang build")
 
-set(SGL_SLANG_VERSION "2026.1.2" CACHE STRING "Slang version to download when not using a local build")
-
-set(SLANG_URL_BASE "https://github.com/shader-slang/slang/releases/download/v${SGL_SLANG_VERSION}/slang-${SGL_SLANG_VERSION}")
+set(SLANG_VERSION "2025.22.1")
+set(SLANG_URL_BASE "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}")
 
 if(SGL_WINDOWS)
     if(SGL_ARCHITECTURE MATCHES "x86_64")
@@ -103,13 +99,6 @@ elseif(SGL_MACOS)
         set(SLANG_DEBUG_INFO_URL "${SLANG_URL_BASE}-macos-aarch64-debug-info.zip")
     endif()
 endif()
-
-if(NOT SGL_LOCAL_SLANG)
-    sgl_download_package(slang ${SLANG_URL})
-endif()
-
-set(SLANG_DIR ${slang_SOURCE_DIR})
-set(SLANG_INCLUDE_DIR ${slang_SOURCE_DIR}/include)
 
 if(SGL_LOCAL_SLANG)
     set(SLANG_DIR ${SGL_LOCAL_SLANG_DIR}/${SGL_LOCAL_SLANG_BUILD_DIR})
@@ -147,8 +136,8 @@ function(sgl_add_library_slang)
             if(EXISTS "${SLANG_TAG_VERSION_HEADER}")
                 extract_define_from_header("${SLANG_TAG_VERSION_HEADER}" "SLANG_VERSION_NUMERIC" SLANG_VERSION_FROM_HEADER)
                 if(SLANG_VERSION_FROM_HEADER)
-                    set(SGL_SLANG_VERSION "${SLANG_VERSION_FROM_HEADER}")
-                    message(STATUS "Using Slang version from local build: ${SGL_SLANG_VERSION}")
+                    set(SLANG_VERSION "${SLANG_VERSION_FROM_HEADER}")
+                    message(STATUS "Using Slang version from local build: ${SLANG_VERSION}")
                 else()
                     message(FATAL_ERROR "Could not extract SLANG_VERSION_NUMERIC from: ${SLANG_TAG_VERSION_HEADER}")
                 endif()
@@ -156,7 +145,7 @@ function(sgl_add_library_slang)
                 message(FATAL_ERROR "Slang tag version header not found: ${SLANG_TAG_VERSION_HEADER}")
             endif()
         endif()
-        set(slang_module_version "-${SGL_SLANG_VERSION}")
+        set(slang_module_version "-${SLANG_VERSION}")
     else()
         set(slang_lib_base slang)
         set(slang_module_version "")
@@ -173,11 +162,7 @@ function(sgl_add_library_slang)
         sgl_copy_binary(${SLANG_DIR}/bin/${slang_lib_base}.dll .)
         sgl_copy_binary(${SLANG_DIR}/bin/slang-glslang.dll .)
         sgl_copy_binary(${SLANG_DIR}/bin/slang-glsl-module.dll .)
-        # slang-llvm.dll is available in x64 prebuilt packages but not in ARM64 packages.
-        # Use conditional copy to support both architectures.
-        if(EXISTS ${SLANG_DIR}/bin/slang-llvm.dll)
-            sgl_copy_binary(${SLANG_DIR}/bin/slang-llvm.dll .)
-        endif()
+        sgl_copy_binary(${SLANG_DIR}/bin/slang-llvm.dll .)
         # Note: The downloaded debug-info archive has single top-level 'bin'
         # folder that is stripped out by FetchContent.
         set(slang_resolved_debug_info "${slang_lib_base}.pdb")
@@ -225,9 +210,6 @@ set(SLANG_RHI_SLANG_INCLUDE_DIR ${SLANG_INCLUDE_DIR} CACHE STRING "" FORCE)
 set(SLANG_RHI_SLANG_BINARY_DIR ${SLANG_DIR} CACHE STRING "" FORCE)
 add_subdirectory(slang-rhi)
 
-# Copy shared slang-rhi-device.h header to shaders directory (wrapped in sgl/device/rhi.slang)
-sgl_copy_shader_file(${CMAKE_CURRENT_SOURCE_DIR}/slang-rhi/include/slang-rhi-device.h slang-rhi)
-
 if(TARGET slang-rhi-nvapi)
     get_target_property(NVAPI_DIR slang-rhi-nvapi INTERFACE_INCLUDE_DIRECTORIES)
     sgl_copy_shader_file(${NVAPI_DIR}/nvHLSLExtns.h nvapi)
@@ -254,14 +236,3 @@ set(SGL_IMGUI_DIR ${imgui_SOURCE_DIR} PARENT_SCOPE)
 
 add_library(header_only INTERFACE)
 target_include_directories(header_only INTERFACE include)
-
-# crashpad
-
-if(SGL_HAS_CRASHPAD)
-    # Copy crashpad_handler binary
-    set(CRASHPAD_HANDLER "crashpad_handler")
-    if(SGL_WINDOWS)
-        set(CRASHPAD_HANDLER "crashpad_handler.exe")
-    endif()
-    sgl_copy_binary(${CMAKE_CURRENT_SOURCE_DIR}/vcpkg/packages/crashpad_${VCPKG_TARGET_TRIPLET}/tools/${CRASHPAD_HANDLER} .)
-endif()

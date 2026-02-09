@@ -6,7 +6,7 @@ import numpy.typing as npt
 from slangpy.core.function import FunctionNode
 from slangpy.core.struct import Struct
 
-from slangpy.types import Tensor
+from slangpy.types.buffer import NDBuffer
 
 
 class InstanceList:
@@ -110,15 +110,15 @@ class InstanceList:
             return None
 
 
-class InstanceTensor(InstanceList):
+class InstanceBuffer(InstanceList):
     """
     Simplified implementation of InstanceList that uses a single buffer for all instances and
     provides buffer convenience functions for accessing its data.
     """
 
-    def __init__(self, struct: Struct, shape: tuple[int, ...], data: Optional[Tensor] = None):
+    def __init__(self, struct: Struct, shape: tuple[int, ...], data: Optional[NDBuffer] = None):
         if data is None:
-            data = Tensor.empty(struct.device_module.session.device, dtype=struct, shape=shape)
+            data = NDBuffer(struct.device_module.session.device, dtype=struct, shape=shape)
         super().__init__(struct, data)
         if data is None:
             data = {}
@@ -131,9 +131,9 @@ class InstanceTensor(InstanceList):
         return self._data.shape
 
     @property
-    def tensor(self) -> Tensor:
+    def buffer(self) -> NDBuffer:
         """
-        Get the tensor.
+        Get the buffer.
         """
         return self._data
 
@@ -147,4 +147,4 @@ class InstanceTensor(InstanceList):
         """
         Set the buffer from a numpy array.
         """
-        self.tensor.copy_from_numpy(data)
+        self.buffer.copy_from_numpy(data)

@@ -1,4 +1,0 @@
-include *.h
-include *.cpp
-include LICENSE
-include README.md

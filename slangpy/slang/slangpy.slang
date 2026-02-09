@@ -9,7 +9,6 @@ module slangpy;
 // Edit: Even this workaround isn't reliable, so we currently disable the warning globally in shader.cpp
 #pragma warning(disable: 30856)
 
-__include "vectorize.slang";
 __include "core.slang";
 __include "randfloatarg.slang";
 __include "wanghasharg.slang";
@@ -17,11 +16,6 @@ __include "threadidarg.slang";
 __include "callidarg.slang";
 __include "atomics.slang";
 __include "staticarray.slang";
-__include "tensorcommon.slang";
 __include "tensor.slang";
-__include "difftensor.slang";
-__include "primaltensor.slang";
-__include "tensor_indices_generated.slang";
-//__include "tensor_indices_each.slang";
 __include "gridarg.slang";
 __include "callshape.slang";

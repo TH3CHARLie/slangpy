@@ -38,9 +38,7 @@ def test_buffer_usage_error(device_type: DeviceType):
 
     ro_buffer = device.create_buffer(size=4, usage=spy.BufferUsage.shader_resource)
 
-    with pytest.raises(
-        Exception, match=r"Buffer\[rw=False\] does not match slang type RWStructuredBuffer"
-    ):
+    with pytest.raises(Exception, match=r"Buffers bound to RW"):
         module.write_only(ro_buffer)
 
 

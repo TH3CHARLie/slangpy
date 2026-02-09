@@ -264,7 +264,6 @@ void callfoo() {
     )
 
     # TODO: Setup when generic reflection works.
-    pass
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)

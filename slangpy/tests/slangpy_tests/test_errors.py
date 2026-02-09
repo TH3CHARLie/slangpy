@@ -5,7 +5,7 @@ import pytest
 from slangpy import float4
 from slangpy.bindings.boundvariable import BoundVariableException
 from slangpy import DeviceType
-from slangpy.types import Tensor
+from slangpy.types.buffer import NDBuffer
 from slangpy.testing import helpers
 
 MODULE = """
@@ -26,7 +26,7 @@ def test_no_matching_arg_count(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "foo", MODULE)
 
-    with pytest.raises(Exception, match=r".*Too many arguments: expected 1, got 2.*"):
+    with pytest.raises(Exception, match=r"Too many positional arguments"):
         function.call(1.0, 2.0)
 
 
@@ -48,7 +48,7 @@ def test_not_enough_args(device_type: DeviceType):
 
     # note: due to no implicit args, falls straight through to slang resolution which provides
     # no special error info yet
-    with pytest.raises(Exception, match=r"Parameter 'a' not specified"):
+    with pytest.raises(Exception, match=r"No Slang overload found"):
         function.call()
 
 
@@ -58,7 +58,7 @@ def test_not_enough_args_2(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "foo2", MODULE)
 
-    with pytest.raises(Exception, match=r"Parameter 'b' not specified"):
+    with pytest.raises(Exception, match=r"all parameters must be specified"):
         function.call(10.0)
 
 
@@ -68,8 +68,18 @@ def test_specify_twice(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "foo2", MODULE)
 
-    with pytest.raises(Exception, match=r"Parameter 'a' specified multiple times"):
+    with pytest.raises(Exception, match=r"already specified"):
         function.call(10.0, a=20.0)
+
+
+@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
+def test_implicit_overload(device_type: DeviceType):
+
+    device = helpers.get_device(device_type)
+    function = helpers.create_function_from_module(device, "foo_ol", MODULE)
+
+    with pytest.raises(Exception, match=r"overloaded function with named or implicit arguments"):
+        function.call(10.0)
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
@@ -103,10 +113,10 @@ def test_bad_implicit_buffer_cast(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "foo_v3", MODULE)
 
-    buffer = Tensor.empty(device, shape=(10,), dtype=float4)
+    buffer = NDBuffer(device, dtype=float4, shape=(10,))
 
     # fail to specialize a float3 against a float
-    with pytest.raises(Exception, match=r".*Argument 0 could not be resolved.*"):
+    with pytest.raises(ValueError, match=r"After implicit casting.*"):
         function(buffer)
 
 
@@ -118,8 +128,8 @@ def test_invalid_broadcast(device_type: DeviceType):
         device, "foo2", MODULE, options={"strict_broadcasting": True}
     )
 
-    buffer = Tensor.empty(device, shape=(10,), dtype=float)
-    buffer2 = Tensor.empty(device, shape=(10, 10), dtype=float)
+    buffer = NDBuffer(device, dtype=float, shape=(10,))
+    buffer2 = NDBuffer(device, dtype=float, shape=(10, 10))
 
     # fail to specialize a float3 against a float
     with pytest.raises(ValueError, match=r"Strict broadcasting is enabled"):
@@ -132,8 +142,8 @@ def test_invalid_broadcast_during_dispatch(device_type: DeviceType):
     device = helpers.get_device(device_type)
     function = helpers.create_function_from_module(device, "foo2", MODULE)
 
-    buffer = Tensor.empty(device, shape=(10, 5), dtype=float)
-    buffer2 = Tensor.empty(device, shape=(10, 10), dtype=float)
+    buffer = NDBuffer(device, dtype=float, shape=(10, 5))
+    buffer2 = NDBuffer(device, dtype=float, shape=(10, 10))
 
     # fail to specialize a float3 against a float
     with pytest.raises(ValueError, match=r"Shape mismatch"):
