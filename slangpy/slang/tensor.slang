@@ -230,16 +230,24 @@ public extension<T : IDifferentiable, let D : int, TensorType : IRWTensor<T, D>>
 #endif
 }
 
-// #pragma warning(pop)
-
-public struct Tensor<T : IDifferentiable, let D : int> : ITensor<T, D>
+// Extend ITensor types to add their element type
+public extension <T, let D: int, TensorType: ITensor<T, D>> TensorType
 {
-    typealias Storage = StorageTraits<T>.BufferType;
+    typedef T ElementType;
+}
+public extension<T, let D : int, TensorType : IWTensor<T, D>> TensorType
+{
+    typedef T ElementType;
+}
+public extension<T, let D : int, TensorType : IRWTensor<T, D>> TensorType
+{
+    typedef T ElementType;
+}
 
-    public Storage buffer;
-    public StridedLayout<D> layout;
-    private uint _shape[D];
-
+#define _SLANGPY_TENSOR_COMMON_FIELDS \
+    public uint[D] _shape;\
+    public uint[D] _strides;\
+    public uint _offset;\
     public property shape : uint[D] { get { return _shape; } }
 
     [TreatAsDifferentiable]
@@ -331,30 +339,68 @@ public struct GradOutTensor<T : IDifferentiable, let D : int> : ITensor<T, D> wh
     public Tensor<T, D> primal;
     public AtomicTensor<T.Differential, D> d_out;
 
-    public property shape : uint[D] { get { return primal.shape; } }
+#ifdef __TARGET_METAL__
+    // Element byte stride - passed from C++ on Metal where sizeof(T) differs from buffer stride.
+    // For example, sizeof(float3)=12 but Metal buffer stride=16.
+    public uint _element_byte_stride;
+#else
+    // On non-Metal platforms, sizeof(T) matches buffer stride, so use static const.
+    static const uint _element_byte_stride = sizeof(T);
+#endif
 
-    [Differentiable]
-    public T get(int[D] idx) { return primal.get(idx); }
-
-    [Differentiable]
-    public T getv(vector<int,D> idx) { return primal.getv(idx); }
-
-    [BackwardDerivativeOf(get)]
-    public void get_bwd(int[D] idx, T.Differential grad)
+    public T read_buffer(int idx)
     {
-        d_out.set(idx, grad);
+        return StorageTraits<T>::atomicLoadWithStride(_data, idx, _element_byte_stride);
+    }
+    public void write_buffer(int idx, T value)
+    {
+        StorageTraits<T>::atomicStoreWithStride(_data, idx, _element_byte_stride, value);
+    }
+    public void accumulate_buffer(int idx, T value)
+    {
+        StorageTraits<T>::atomicAddWithStride(_data, idx, _element_byte_stride, value);
+    }
+    [ForceInline] void _accumulate_each<each I : __BuiltinIntegerType>(T value, expand each I idx)
+    {
+        int lin_idx = _idx_each(expand each idx, _strides, _offset);
+        accumulate_buffer(lin_idx, value);
     }
 
     [BackwardDerivativeOf(getv)]
     public void getv_bwd(vector<int,D> idx, T.Differential grad)
     {
-        d_out.setv(idx, grad);
+        StorageTraits<T>::atomicAddWithStride(_data, _idx(idx, _strides, _offset), _element_byte_stride, value);
+    }
+    [ForceInline] public void add<I : __BuiltinIntegerType>(vector<I, D> idx, T value)
+    {
+        StorageTraits<T>::atomicAddWithStride(_data, _idx(idx, _strides, _offset), _element_byte_stride, value);
     }
 
     public void load<let SliceD : int>(ContextND<D - SliceD> ctx, out GradOutTensor<T, SliceD> value)
     {
-        primal.load(ctx, value.primal);
-        d_out.load(ctx, value.d_out);
+        get { return load(indices); }
+        set { return store(indices, newValue); }
+    }
+    public __subscript<I : __BuiltinIntegerType>(vector<I, D> indices)->T
+    {
+        get { return load(indices); }
+        set { return store(indices, newValue); }
+    }
+
+    public void __slangpy_load(Context0D context, out This value)
+    {
+        value = this;
+    }
+    public void __slangpy_load<let SliceD : int>(ContextND<D - SliceD> ctx, out AtomicTensor<T, SliceD> value)
+    {
+        value._data = _data;
+#ifdef __TARGET_METAL__
+        value._element_byte_stride = _element_byte_stride;
+#endif
+        _slice(ctx.call_id, _strides, _offset, value._strides, value._offset);
+        [ForceUnroll]
+        for (int i = 0; i < SliceD; ++i)
+            value._shape[i] = _shape[D - SliceD + i];
     }
 }
 
@@ -470,4 +516,58 @@ public extension<T: __BuiltinFloatingPointType, let N:int> Tensor<vector<T,N>, 2
 
         return lerp(lerp(c00, c10, (T)frac.x), lerp(c01, c11, (T)frac.x), (T)frac.y);
     }
+}
+#endif
+
+void _get_sample_indices(float2 uv, int2 shape, out int2 idx0, out int2 idx1, out float2 interp)
+{
+    int2 maxidx = shape - 1;
+    int2 texel = int2(uv * shape);
+    interp = frac(uv * shape);
+
+    idx0 = clamp(texel, int2(0, 0), maxidx);
+    idx1 = min(texel + int2(1, 1), maxidx);
+}
+
+T _bilerp<T: __BuiltinFloatingPointType>(T c00, T c10, T c01, T c11, float2 interp)
+{
+    return lerp(lerp(c00, c10, (T)interp.x), lerp(c01, c11, (T)interp.x), (T)interp.y);
+}
+vector<T,N> _bilerp<T: __BuiltinFloatingPointType, let N : int>(vector<T, N> c00, vector<T, N> c10, vector<T, N> c01, vector<T, N> c11, float2 interp)
+{
+    return lerp(lerp(c00, c10, (T)interp.x), lerp(c01, c11, (T)interp.x), (T)interp.y);
+}
+
+#define _SLANGPY_TENSOR_SAMPLE                                                                                         \
+    public ElementType sample(float2 uv)                                                                               \
+    {                                                                                                                  \
+        int2 shape = int2(shape[1], shape[0]);                                                                         \
+        int2 idx0, idx1;                                                                                               \
+        float2 frac;                                                                                                   \
+        _get_sample_indices(uv, shape, idx0, idx1, frac);                                                              \
+        ElementType c00 = load(idx0);                                                                                  \
+        ElementType c10 = load(int2(idx1.x, idx0.y));                                                                  \
+        ElementType c01 = load(int2(idx0.x, idx1.y));                                                                  \
+        ElementType c11 = load(idx1);                                                                                  \
+        return _bilerp(c00, c10, c01, c11, frac);                                                                      \
+    }
+
+public extension<T : __BuiltinFloatingPointType, TensorType: ITensor<T,2>> TensorType
+{
+    _SLANGPY_TENSOR_SAMPLE
+}
+
+public extension<T : __BuiltinFloatingPointType, let N : int, TensorType: ITensor<vector<T,N>, 2>> TensorType
+{
+    _SLANGPY_TENSOR_SAMPLE
+}
+
+public extension<T : __BuiltinFloatingPointType, TensorType : IRWTensor<T, 2>> TensorType
+{
+    _SLANGPY_TENSOR_SAMPLE
+}
+
+public extension<T : __BuiltinFloatingPointType, let N : int, TensorType : IRWTensor<vector<T, N>, 2>> TensorType
+{
+    _SLANGPY_TENSOR_SAMPLE
 }

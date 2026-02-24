@@ -18,6 +18,10 @@ from slangpy.reflection.reflectiontypes import (
     ScalarType,
     VectorType,
     MatrixType,
+    TensorType,
+    TensorAccess,
+    DiffTensorViewType,
+    UnknownType,
 )
 from slangpy.types.buffer import innermost_type
 
@@ -171,7 +175,71 @@ class TensorRefMarshall(TensorMarshall):
                 "CUDA tensors should be handled by C++ fast path, not Python marshalling"
             )
 
-    def read_calldata(
+        # Store for Python-side use
+        self._layout = layout
+        self._torch_dtype = torch_dtype
+        self._slang_dtype = slang_dtype
+
+        # Initialize base class (sets d_in, d_out, dims, writable etc in C++)
+        super().__init__(
+            dims=full_dims,
+            writable=writable,
+            slang_type=slang_type,
+            slang_element_type=dtype,
+            element_layout=dtype.buffer_layout.reflection,
+            d_in=d_in,
+            d_out=d_out,
+        )
+
+    @property
+    def layout(self) -> SlangProgramLayout:
+        return self._layout
+
+    @property
+    def torch_dtype(self) -> torch.dtype:
+        return self._torch_dtype
+
+    @property
+    def slang_dtype(self) -> SlangType:
+        return self._slang_dtype
+
+    def __repr__(self) -> str:
+        return f"TorchTensor[dtype={self.slang_element_type.full_name}, dims={self.dims}, writable={self.writable}]"
+
+    @property
+    def has_derivative(self) -> bool:
+        return self.d_in is not None or self.d_out is not None
+
+    @property
+    def is_writable(self) -> bool:
+        return self.writable
+
+    def resolve_types(self, context: BindContext, bound_type: SlangType):
+        """Resolve types during binding phase."""
+        if isinstance(bound_type, DiffTensorViewType):
+            return self._resolve_difftensorview(context, bound_type)
+        return spytc.resolve_types(self, context, bound_type)
+
+    def _resolve_difftensorview(self, context: BindContext, bound_type: DiffTensorViewType):
+        """Resolve DiffTensorView types for torch tensors."""
+        dtv_element = bound_type.dtype
+
+        # If DiffTensorView has generic type (Unknown), use tensor's element type
+        if isinstance(dtv_element, UnknownType) or dtv_element.is_generic:
+            resolved_element = self.slang_element_type
+        else:
+            resolved_element = dtv_element
+
+        dtv_type = self._layout.difftensorview_type(resolved_element)
+        if dtv_type is None:
+            raise ValueError(f"DiffTensorView<{resolved_element.full_name}> not found")
+        return [dtv_type]
+
+    def reduce_type(self, context: BindContext, dimensions: int):
+        """Reduce tensor type by consuming dimensions."""
+        return spytc.reduce_type(self, context, dimensions)
+
+    def resolve_dimensionality(
         self,
         context: CallContext,
         binding: "BoundVariableRuntime",
@@ -191,8 +259,20 @@ class TensorRefMarshall(TensorMarshall):
                 data.interop_buffer.to_torch(type=data_type, shape=shape, strides=strides),
             )
 
-            primal.untyped_storage().copy_(interop_tensor.untyped_storage())
-            data.interop_buffer = None
+    def gen_trampoline_load(
+        self, cgb: CodeGenBlock, binding: BoundVariable, is_entry_point: bool
+    ) -> bool:
+        return spytc.gen_trampoline_load(self, cgb, binding, is_entry_point)
+
+    def gen_trampoline_store(
+        self, cgb: CodeGenBlock, binding: BoundVariable, is_entry_point: bool
+    ) -> bool:
+        return spytc.gen_trampoline_store(self, cgb, binding, is_entry_point)
+
+    def build_shader_object(self, context: BindContext, data: torch.Tensor) -> ShaderObject:
+        """Build shader object for dispatch."""
+        so = context.device.create_shader_object(self.slang_type.uniform_layout.reflection)
+        cursor = ShaderCursor(so)
 
             if self.d_in is not None:
                 assert data.grad_in is not None
