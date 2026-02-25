@@ -26,7 +26,6 @@ SGL_DICT_TO_DESC_FIELD(optimization, SlangOptimizationLevel)
 SGL_DICT_TO_DESC_FIELD_LIST(downstream_args, std::string)
 SGL_DICT_TO_DESC_FIELD(dump_intermediates, bool)
 SGL_DICT_TO_DESC_FIELD(dump_intermediates_prefix, std::string)
-SGL_DICT_TO_DESC_FIELD(enable_experimental_features, bool)
 SGL_DICT_TO_DESC_END()
 
 SGL_DICT_TO_DESC_BEGIN(SlangLinkOptions)

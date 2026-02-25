@@ -274,16 +274,6 @@ class TensorMarshall(NativeTensorMarshall):
             )
         cgb.type_alias(f"_t_{binding.variable_name}", type_name)
 
-    def gen_trampoline_load(
-        self, cgb: CodeGenBlock, binding: BoundVariable, is_entry_point: bool
-    ) -> bool:
-        return spytc.gen_trampoline_load(self, cgb, binding, is_entry_point)
-
-    def gen_trampoline_store(
-        self, cgb: CodeGenBlock, binding: BoundVariable, is_entry_point: bool
-    ) -> bool:
-        return spytc.gen_trampoline_store(self, cgb, binding, is_entry_point)
-
     def build_shader_object(self, context: "BindContext", data: Any) -> "ShaderObject":
         so = context.device.create_shader_object(self.slang_type.uniform_layout.reflection)
         cursor = ShaderCursor(so)

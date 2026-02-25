@@ -20,27 +20,6 @@
 
 namespace sgl::slangpy {
 
-/// Maximum dimensions for TensorView (matches slang-cuda-prelude.h)
-static constexpr int kSlangPyTensorViewMaxDim = 5;
-
-/// TensorViewData - C++ struct matching TensorView's memory layout.
-struct TensorViewData {
-    uint64_t data;                              // GPU pointer (8 bytes)
-    uint32_t strides[kSlangPyTensorViewMaxDim]; // Strides in bytes (20 bytes)
-    uint32_t sizes[kSlangPyTensorViewMaxDim];   // Shape (20 bytes)
-    uint32_t dimensionCount;                    // Number of dims (4 bytes)
-};
-// 52 bytes of data + 4 bytes padding for 8-byte alignment = 56 bytes
-static_assert(sizeof(TensorViewData) == 56, "TensorViewData must be 56 bytes to match TensorView");
-
-/// DiffTensorViewData - C++ struct matching DiffTensorViewData's memory layout in Slang.
-/// Contains primal (56 bytes) + diff (56 bytes) = 112 bytes total.
-struct DiffTensorViewData {
-    TensorViewData primal; // 56 bytes - primal tensor data
-    TensorViewData diff;   // 56 bytes - gradient/diff tensor data
-};
-static_assert(sizeof(DiffTensorViewData) == 112, "DiffTensorViewData must be 112 bytes");
-
 class NativeTensor;
 
 struct NativeTensorDesc : public StridedBufferViewDesc { };
@@ -146,38 +125,6 @@ public:
     nb::object create_dispatchdata(nb::object data) const override;
 
     nb::object read_output(CallContext* context, NativeBoundVariableRuntime* binding, nb::object data) const override;
-
-    /// Cached shader offsets for a single tensor's fields
-    /// Public so NativeTorchTensorMarshall can reuse them
-    struct TensorFieldOffsets {
-        int array_stride;
-        ShaderOffset data;                // Offset for _data field
-        ShaderOffset shape;               // Offset for _shape field
-        ShaderOffset strides;             // Offset for _strides field
-        ShaderOffset offset;              // Offset for _offset field
-        ShaderOffset element_byte_stride; // Offset for _element_byte_stride field (if present)
-        bool is_valid = false;            // Whether offsets have been initialized
-        bool is_tensorview = false;
-    };
-
-    /// Cached offsets for all tensor variants (primal, grad_in, grad_out)
-    /// Public so NativeTorchTensorMarshall can reuse them
-    struct CachedOffsets {
-        TensorFieldOffsets primal;    // Offsets for primal tensor fields
-        TensorFieldOffsets grad_in;   // Offsets for gradient input fields (if present)
-        TensorFieldOffsets grad_out;  // Offsets for gradient output fields (if present)
-        bool has_grad_fields = false; // Whether tensor uses _primal wrapper (differentiated mode)
-        ShaderOffset field_offset;    // Base offset of the entire field structure
-        uint32_t field_size = 0;      // Total size of the field in uniform data
-    };
-
-    /// Extract TensorFieldOffsets from a ShaderCursor pointing to a tensor structure
-    /// Public so NativeTorchTensorMarshall can reuse it
-    static TensorFieldOffsets extract_tensor_field_offsets(ShaderCursor tensor_cursor);
-
-    /// Extract all cached offsets (primal, grad_in, grad_out) from a field cursor
-    /// Public so NativeTorchTensorMarshall can reuse it
-    static CachedOffsets extract_offsets(ShaderCursor cursor);
 
 private:
     int m_dims;

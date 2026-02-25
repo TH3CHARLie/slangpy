@@ -45,80 +45,6 @@ namespace {
     }
 } // anonymous namespace
 
-
-NativeTensorMarshall::TensorFieldOffsets NativeTensorMarshall::extract_tensor_field_offsets(ShaderCursor tensor_cursor)
-{
-    TensorFieldOffsets offsets;
-
-    ShaderCursor data_cursor = tensor_cursor.find_field("_data");
-    if (!data_cursor.is_valid()) {
-        offsets.is_tensorview = true;
-        offsets.is_valid = true;
-        return offsets;
-    }
-
-    offsets.data = data_cursor.offset();
-    offsets.shape = tensor_cursor["_shape"].offset();
-    offsets.strides = tensor_cursor["_strides"].offset();
-    offsets.offset = tensor_cursor["_offset"].offset();
-
-    // Extract element_byte_stride offset if present (for AtomicTensor on Metal)
-    ShaderCursor ebs_field = tensor_cursor.find_field("_element_byte_stride");
-    if (ebs_field.is_valid())
-        offsets.element_byte_stride = ebs_field.offset();
-
-    offsets.is_valid = true;
-    offsets.array_stride
-        = (int)tensor_cursor["_shape"].slang_type_layout()->getElementStride(SLANG_PARAMETER_CATEGORY_UNIFORM);
-    return offsets;
-}
-
-NativeTensorMarshall::CachedOffsets NativeTensorMarshall::extract_offsets(ShaderCursor field)
-{
-    NativeTensorMarshall::CachedOffsets offsets;
-
-    std::string_view type_name = field.slang_type_layout()->getName();
-    bool is_diff_tensor_view = type_name.find("DiffTensorView") != std::string_view::npos;
-    bool is_diff_tensor = !is_diff_tensor_view && type_name.find("DiffTensor") != std::string_view::npos;
-
-    if (is_diff_tensor) {
-        // SlangPy's DiffTensor: _primal/_grad_in/_grad_out pattern
-        ShaderCursor primal_field = field.find_field("_primal");
-        if (primal_field.is_valid()) {
-            offsets.has_grad_fields = true;
-            offsets.primal = extract_tensor_field_offsets(primal_field);
-
-            ShaderCursor grad_in_field = field.find_field("_grad_in");
-            if (grad_in_field.is_valid()) {
-                offsets.grad_in = extract_tensor_field_offsets(grad_in_field);
-            }
-            ShaderCursor grad_out_field = field.find_field("_grad_out");
-            if (grad_out_field.is_valid()) {
-                offsets.grad_out = extract_tensor_field_offsets(grad_out_field);
-            }
-        }
-    } else if (is_diff_tensor_view) {
-        // Slang's DiffTensorView: primal/diff pattern
-        ShaderCursor primal_field = field.find_field("primal");
-        ShaderCursor diff_field = field.find_field("diff");
-        if (primal_field.is_valid() && diff_field.is_valid()) {
-            offsets.has_grad_fields = true;
-            offsets.primal = extract_tensor_field_offsets(primal_field);
-            offsets.grad_in = extract_tensor_field_offsets(diff_field);
-            offsets.grad_out = offsets.grad_in;
-        }
-    } else {
-        // Plain tensor (TensorView or Tensor)
-        offsets.has_grad_fields = false;
-        offsets.primal = extract_tensor_field_offsets(field);
-    }
-
-    offsets.field_offset = field.offset();
-    offsets.field_size = (int)field.slang_type_layout()->getSize(SLANG_PARAMETER_CATEGORY_UNIFORM);
-
-    return offsets;
-}
-
 NativeTensor::NativeTensor(
     NativeTensorDesc desc,
     const ref<Buffer>& storage,
@@ -425,109 +351,7 @@ void NativeTensorMarshall::write_shader_cursor_pre_dispatch(
     NativeMarshall::write_shader_cursor_pre_dispatch(context, binding, cursor, value, read_back);
 }
 
-void NativeTensorMarshall::write_tensor_fields_from_buffer(
-    ShaderObject* shader_object,
-    void* base_address,
-    const TensorFieldOffsets& offsets,
-    const ref<Buffer>& buffer,
-    const Shape& shape,
-    const Shape& strides,
-    int offset
-) const
-{
-    if (offsets.data.binding_range_index == offsets.shape.binding_range_index) {
-        write_value_helper(
-            base_address,
-            offsets.data.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-            buffer->device_address()
-        );
-    } else {
-        shader_object->set_buffer(offsets.data, buffer);
-    }
-
-    write_strided_array_helper(
-        base_address,
-        offsets.shape.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-        shape,
-        offsets.array_stride
-    );
-
-    write_strided_array_helper(
-        base_address,
-        offsets.strides.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-        strides,
-        offsets.array_stride
-    );
-
-    write_value_helper(
-        base_address,
-        offsets.offset.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-        offset
-    );
-
-    // Write element byte stride if field exists (for AtomicTensor on Metal)
-    // This is needed because sizeof(T) in shader may differ from buffer stride
-    // due to alignment requirements (e.g., sizeof(float3)=12 but Metal buffer stride=16)
-    if (offsets.element_byte_stride.is_valid()) {
-        write_value_helper(
-            base_address,
-            offsets.element_byte_stride.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-            static_cast<uint32_t>(buffer->desc().struct_size)
-        );
-    }
-}
-
-void NativeTensorMarshall::write_tensor_fields_from_pointer(
-    ShaderObject* shader_object,
-    void* base_address,
-    const TensorFieldOffsets& offsets,
-    void* data_ptr,
-    const Shape& shape,
-    const Shape& strides,
-    int offset
-) const
-{
-    SGL_UNUSED(shader_object);
-
-    // Write device pointer
-    DeviceAddress address = reinterpret_cast<DeviceAddress>(data_ptr);
-    write_value_helper(
-        base_address,
-        offsets.data.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-        address
-    );
-
-    // Write shape and strides using the same mechanism as write_tensor_fields_from_buffer
-    write_strided_array_helper(
-        base_address,
-        offsets.shape.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-        shape,
-        offsets.array_stride
-    );
-
-    write_strided_array_helper(
-        base_address,
-        offsets.strides.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-        strides,
-        offsets.array_stride
-    );
-
-    write_value_helper(
-        base_address,
-        offsets.offset.uniform_offset - m_cached_offsets.field_offset.uniform_offset,
-        offset
-    );
-
-    // Note: element_byte_stride is not written here for PyTorch tensors.
-    // On CUDA (the only backend PyTorch supports), _element_byte_stride is static const in shader.
-    // This field only exists as a runtime field on Metal (for AtomicTensor), and PyTorch doesn't support Metal.
-    SGL_CHECK(
-        !offsets.element_byte_stride.is_valid(),
-        "Unexpected element_byte_stride field for PyTorch tensor - this path should only be used on CUDA"
-    );
-}
-
-void NativeTensorMarshall::write_native_tensor_fields(
+void NativeTensorMarshall::write_shader_cursor_fields(
     CallContext* context,
     NativeBoundVariableRuntime* binding,
     ShaderCursor field,
@@ -540,31 +364,30 @@ void NativeTensorMarshall::write_native_tensor_fields(
     // Write the buffer storage.
     field["buffer"] = buffer->storage();
 
-    if (offsets.is_tensorview) {
-        // TensorView path: build TensorViewData struct and write via set_data()
-        TensorViewData tvd = {};
-        // Device address is buffer base + byte offset
-        tvd.data = tensor->storage()->device_address() + tensor->offset() * element_stride();
+    // Write shape vector as an array of ints.
+    const std::vector<int>& shape_vec = buffer->shape().as_vector();
+    field["_shape"]
+        ._set_array_unsafe(&shape_vec[0], shape_vec.size() * 4, shape_vec.size(), TypeReflection::ScalarType::int32);
 
-        const int ndim = static_cast<int>(shape.size());
-        // TensorView strides are in bytes, NativeTensor strides are in elements
-        for (int i = 0; i < ndim && i < kSlangPyTensorViewMaxDim; i++) {
-            tvd.strides[i] = static_cast<uint32_t>(strides[i] * element_stride());
-            tvd.sizes[i] = static_cast<uint32_t>(shape[i]);
+    // Generate and write strides vector, clearing strides to 0
+    // for dimensions that are broadcast.
+    std::vector<int> strides_vec = buffer->strides().as_vector();
+    const std::vector<int>& transform = binding->transform().as_vector();
+    const std::vector<int>& call_shape = context->call_shape().as_vector();
+    for (size_t i = 0; i < transform.size(); i++) {
+        int csidx = transform[i];
+        if (call_shape[csidx] != shape_vec[i]) {
+            strides_vec[i] = 0;
         }
-        tvd.dimensionCount = static_cast<uint32_t>(ndim);
-        shader_object->set_data(m_cached_offsets.field_offset, &tvd, sizeof(TensorViewData));
-        return;
     }
 
-    write_tensor_fields_from_buffer(
-        shader_object,
-        base_address,
-        offsets,
-        tensor->storage(),
-        shape,
-        strides,
-        tensor->offset()
+    // Write the strides vector as an array of ints.
+    auto layout_field = field["layout"];
+    layout_field["strides"]._set_array_unsafe(
+        &strides_vec[0],
+        strides_vec.size() * 4,
+        strides_vec.size(),
+        TypeReflection::ScalarType::int32
     );
     layout_field["offset"] = buffer->offset();
 }
