@@ -26,6 +26,28 @@ def find_tunable_decls(module: SlangModule) -> list[DeclReflection]:
     return results
 
 
+def find_interfaces_for_decl(module: SlangModule, decl: DeclReflection) -> list[spy.TypeReflection]:
+    """Return all interfaces that a declaration conforms to.
+
+    :param module: A loaded Slang module.
+    :param decl: A DeclReflection node to check.
+    :return: List of TypeReflection nodes for interfaces this decl conforms to.
+    """
+    layout = module.layout
+    decl_type = decl.as_type()
+    if decl_type is None:
+        return []
+    root = module.module_decl
+    results = []
+    for i in range(len(root)):
+        child = root[i]
+        itype = child.as_type()
+        if itype and itype.kind == spy.TypeReflection.Kind.interface:
+            if layout.is_sub_type(decl_type, itype):
+                results.append(itype)
+    return results
+
+
 def find_conforming_types(module: SlangModule, interface_name: str) -> list[DeclReflection]:
     """Return all non-extern struct decls in module that conform to the named interface.
 
@@ -48,23 +70,47 @@ def find_conforming_types(module: SlangModule, interface_name: str) -> list[Decl
     return results
 
 
+def discover_tuning_space(module: SlangModule) -> dict[str, dict[str, list[str]]]:
+    """Analyze a module and return its full tuning space.
+
+    For each [Tunable] extern struct, discovers the interface(s) it conforms to
+    and all concrete implementations available for that interface.
+
+    :param module: A loaded Slang module.
+    :return: Dict mapping tunable name -> {interface name -> [impl names]}.
+    """
+    result: dict[str, dict[str, list[str]]] = {}
+    for decl in find_tunable_decls(module):
+        interfaces: dict[str, list[str]] = {}
+        for itype in find_interfaces_for_decl(module, decl):
+            conformers = find_conforming_types(module, itype.name)
+            interfaces[itype.name] = [c.name for c in conformers]
+        result[decl.name] = interfaces
+    return result
+
+
 if __name__ == "__main__":
     import pathlib
+    import sys
 
-    slang_source = (pathlib.Path(__file__).parent / "example.slang").read_text()
+    if len(sys.argv) > 1:
+        slang_path = pathlib.Path(sys.argv[1])
+    else:
+        slang_path = pathlib.Path(__file__).parent / "example.slang"
+
+    slang_source = slang_path.read_text()
 
     device = spy.Device()
-    module = device.load_module_from_source("example", slang_source)
+    module = device.load_module_from_source(slang_path.stem, slang_source)
 
-    tunables = find_tunable_decls(module)
-    print(f"Tunable decls ({len(tunables)}):")
-    for d in tunables:
-        print(f"  {d.name}")
-    assert len(tunables) == 1 and tunables[0].name == "TunableFoo", f"unexpected tunables: {tunables}"
+    space = discover_tuning_space(module)
 
-    conformers = find_conforming_types(module, "IFoo")
-    names = {d.name for d in conformers}
-    print(f"Conforming types: {names}")
-    assert names == {"FooSlow", "FooFast"}, f"unexpected conformers: {names}"
-
-    print("All assertions passed.")
+    if not space:
+        print("No [Tunable] declarations found.")
+    else:
+        for tunable, interfaces in space.items():
+            print(f"[Tunable] extern struct {tunable}")
+            for iface, impls in interfaces.items():
+                print(f"  implements: {iface}")
+                for impl in impls:
+                    print(f"    - {impl}")
