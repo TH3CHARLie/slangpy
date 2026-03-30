@@ -68,6 +68,8 @@ SGL_PY_EXPORT(device_reflection)
             "child_name"_a,
             D(DeclReflection, find_first_child_of_kind)
         )
+        .def("has_modifier", &DeclReflection::has_modifier, "modifier"_a,
+             "Returns true if this declaration has the given modifier.")
         .def(
             "__len__",
             [](DeclReflection& self)

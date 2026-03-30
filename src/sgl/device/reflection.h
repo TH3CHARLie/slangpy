@@ -318,6 +318,12 @@ public:
     /// Finds the first child of a specific kind with a given name.
     /// Note: Only supported for types, functions and variables.
     ref<const DeclReflection> find_first_child_of_kind(Kind kind, std::string_view child_name) const;
+
+    /// Returns true if this declaration has the given modifier (e.g. extern, static, const).
+    bool has_modifier(ModifierID modifier) const
+    {
+        return slang_target()->findModifier(static_cast<slang::Modifier::ID>(modifier)) != nullptr;
+    }
 };
 SGL_ENUM_REGISTER(DeclReflection::Kind);
 
