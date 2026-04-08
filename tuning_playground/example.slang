@@ -32,3 +32,4 @@ float add(float a, int b)
     TunableFoo foo;
     return foo.exec(a, b);
 }
+
