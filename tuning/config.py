@@ -49,6 +49,10 @@ class TuningConfig:
             b.tunable_name: (b.interface_name, b.impl_name) for b in self.bindings
         }
 
+    def to_link_bindings(self) -> list[tuple[str, str, str]]:
+        """Convert to the list of triples that FunctionNode.with_settings() expects."""
+        return [(b.tunable_name, b.interface_name, b.impl_name) for b in self.bindings]
+
     def __str__(self) -> str:
         return ",".join(str(b) for b in self.bindings)
 
