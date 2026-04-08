@@ -75,6 +75,7 @@ class FunctionBuildInfo:
         self.ray_tracing_max_ray_payload_size: int = 0
         self.ray_tracing_max_attribute_size: int = 8
         self.ray_tracing_flags: RayTracingPipelineFlags = RayTracingPipelineFlags.none
+        self.link_type_bindings: list[tuple[str, str, str]] = []
 
 
 class FunctionNode(NativeFunctionNode):
@@ -360,6 +361,18 @@ class FunctionNode(NativeFunctionNode):
         bwds_node = FunctionNodeBwds(self)
         return CallData(bwds_node, *args, **kwargs)
 
+    def with_settings(self, config: Any) -> "FunctionNodeLinkTypeBindings":
+        """Apply link-time type bindings to this function.
+
+        Accepts either a TuningConfig (via its to_link_bindings() method) or
+        an iterable of (tunable_name, interface_name, impl_name) triples.
+        """
+        if hasattr(config, "to_link_bindings"):
+            bindings = config.to_link_bindings()
+        else:
+            bindings = list(config)
+        return FunctionNodeLinkTypeBindings(self, bindings)
+
     def call_group_shape(self, call_group_shape: Shape):
         """
         Specify the call group shape for the function. This determines how the computation
@@ -541,6 +554,28 @@ class FunctionNodeLogger(FunctionNode):
 
     def _populate_build_info(self, info: FunctionBuildInfo):
         info.logger = self.logger
+
+
+class FunctionNodeLinkTypeBindings(FunctionNode):
+    def __init__(
+        self,
+        parent: NativeFunctionNode,
+        bindings: list[tuple[str, str, str]],
+    ) -> None:
+        super().__init__(parent, FunctionNodeType.kernelgen, bindings)
+        self._bindings = [(str(t), str(i), str(im)) for (t, i, im) in bindings]
+        canonical = tuple(sorted(self._bindings))
+        self.slangpy_signature = f"[link_type_bindings:{canonical}]"
+
+    @property
+    def bindings(self) -> list[tuple[str, str, str]]:
+        return self._bindings
+
+    def _populate_build_info(self, info: FunctionBuildInfo):
+        merged: dict[str, tuple[str, str, str]] = {b[0]: b for b in info.link_type_bindings}
+        for b in self._bindings:
+            merged[b[0]] = b
+        info.link_type_bindings = list(merged.values())
 
 
 class FunctionNodeCallGroupShape(FunctionNode):

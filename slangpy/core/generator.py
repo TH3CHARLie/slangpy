@@ -119,6 +119,23 @@ def _emit_user_constants(build_info: "FunctionBuildInfo", cg: CodeGen) -> None:
                 )
 
 
+def _emit_external_structs(build_info: "FunctionBuildInfo", cg: CodeGen) -> None:
+    """Emit link-time type bindings as exported Slang struct specializations.
+
+    For each ``(tunable_name, interface_name, impl_name)`` triple in
+    ``build_info.link_type_bindings``, appends::
+
+        export struct {tunable_name} : {interface_name} = {impl_name};
+
+    to the ``CodeGen.constants`` block, providing a link-time definition
+    for a matching ``[Tunable] extern struct`` declared in the main module.
+    """
+    for tunable_name, interface_name, impl_name in build_info.link_type_bindings:
+        cg.constants.append_statement(
+            f"export struct {tunable_name} : {interface_name} = {impl_name}"
+        )
+
+
 #: Compatibility alias for legacy imports.
 generate_constants = _emit_user_constants
 
@@ -447,6 +464,7 @@ def _emit_link_time_constants(
         export static const int[call_data_len] call_group_shape_vector = {};
     """
     _emit_user_constants(build_info, cg)
+    _emit_external_structs(build_info, cg)
     cg.constants.append_statement(f"export static const int call_data_len = {call_data_len}")
     cg.constants.append_statement(f"export static const int call_group_size = {call_group_size}")
 
