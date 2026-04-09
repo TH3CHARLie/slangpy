@@ -295,10 +295,23 @@ def main() -> int:
     ap.add_argument("--depths", nargs="+", type=int)
     ap.add_argument("--freq-bands", nargs="+", type=int)
     ap.add_argument("--precisions", nargs="+", choices=["half", "float"])
-    ap.add_argument("--output", type=pathlib.Path, default=THIS_DIR / "results.jsonl")
+    ap.add_argument(
+        "--output",
+        type=pathlib.Path,
+        default=None,
+        help="defaults to results_<precision>.jsonl when sweeping a single precision, "
+        "results.jsonl otherwise",
+    )
     ap.add_argument("--limit", type=int, default=0, help="run only the first N configs")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if args.output is None:
+        precs = args.precisions or ["float"]
+        if len(precs) == 1:
+            args.output = THIS_DIR / f"results_{precs[0]}.jsonl"
+        else:
+            args.output = THIS_DIR / "results.jsonl"
 
     configs = sweep_configs(args)
     if args.limit:
