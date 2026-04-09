@@ -12,9 +12,8 @@ import slangpy;
 
     Takes an input with NumInputs elements, and returns NumOutputs elements.
 
-    LinearLayer implements the multiply in software for plain arrays.
-    (The CoopVec hardware-accelerated variant has been removed for the autotune
-    benchmark fork — only the float/array path is exercised by the sweep.)
+    LinearLayer implements the multiply in software for plain arrays,
+    and CoopVecLinearLayer uses hardware acceleration using cooperative vectors.
 */
 public struct LinearLayer<
     T : IReal,
@@ -57,5 +56,38 @@ public struct LinearLayer<
             }
         }
         x = diffPair(x.p, dx);
+    }
+}
+
+public struct CoopVecLinearLayer<
+    T : IReal,
+    int NumInputs,
+    int NumOutputs
+> : IModel<DiffCoopVec<T, NumInputs>, DiffCoopVec<T, NumOutputs>> where T.Differential : IAtomicAddable
+{
+    static const CoopVecComponentType ComponentType = InputType::ComponentType;
+
+    public DiffTensor<T, 1> weights;
+    public DiffTensor<T, 1> biases;
+
+    [BackwardDerivative(backward)]
+    public OutputType forward(InputType x)
+    {
+        return OutputType(coopVecMatMulAdd<T, NumOutputs>(
+            x.cv, ComponentType,
+            weights._primal._data, 0, ComponentType,
+            biases._primal._data, 0, ComponentType,
+            CoopVecMatrixLayout.TrainingOptimal, false, 0
+        ));
+    }
+
+    public void backward(inout DifferentialPair<InputType> x, OutputType grad)
+    {
+        coopVecOuterProductAccumulate(grad.cv, x.p.cv, weights._grad_out._data, 0, 0, CoopVecMatrixLayout.TrainingOptimal, ComponentType);
+        coopVecReduceSumAccumulate(grad.cv, biases._grad_out._data, 0);
+
+        let dX = coopVecMatMul<T, NumInputs>(grad.cv, ComponentType, weights._primal._data, 0, ComponentType, CoopVecMatrixLayout.TrainingOptimal, true, 0);
+
+        x = diffPair(x.p, InputType(dX));
     }
 }
