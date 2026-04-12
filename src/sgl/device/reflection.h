@@ -56,6 +56,7 @@ enum class ModifierID {
     in = slang::Modifier::ID::In,
     out = slang::Modifier::ID::Out,
     inout = slang::Modifier::ID::InOut,
+    tunable = slang::Modifier::ID::Tunable,
 };
 
 SGL_ENUM_INFO(
@@ -72,6 +73,7 @@ SGL_ENUM_INFO(
         {ModifierID::in, "inn"},
         {ModifierID::out, "out"},
         {ModifierID::inout, "inout"},
+        {ModifierID::tunable, "tunable"},
     }
 );
 SGL_ENUM_REGISTER(ModifierID);

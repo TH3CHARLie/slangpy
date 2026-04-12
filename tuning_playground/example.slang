@@ -1,9 +1,3 @@
-[__AttributeUsage(_AttributeTargets.Struct)]
-struct TunableAttribute
-{
-}
-
-
 interface IFoo {
     float exec(float a, int b);
 }

@@ -20,8 +20,7 @@ def find_tunable_decls(module: SlangModule) -> list[DeclReflection]:
     results = []
     for decl in root.children_of_kind(spy.DeclReflection.Kind.struct):
         if decl.has_modifier(spy.ModifierID.extern):
-            type_refl = decl.as_type()
-            if type_refl and type_refl.find_user_attribute_by_name("Tunable"):
+            if decl.has_modifier(spy.ModifierID.tunable):
                 results.append(decl)
     return results
 

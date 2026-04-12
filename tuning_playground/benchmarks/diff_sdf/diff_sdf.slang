@@ -21,9 +21,6 @@
 
 import slangpy;
 
-[__AttributeUsage(_AttributeTargets.Struct)]
-struct TunableAttribute {}
-
 #ifndef N_STEPS
 #define N_STEPS 32
 #endif

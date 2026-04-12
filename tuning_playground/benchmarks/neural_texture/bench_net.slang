@@ -13,9 +13,6 @@
 
 import slangpy;
 
-[__AttributeUsage(_AttributeTargets.Struct)]
-struct TunableAttribute {}
-
 #ifndef W
 #define W 32
 #endif

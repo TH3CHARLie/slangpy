@@ -1,8 +1,3 @@
-[__AttributeUsage(_AttributeTargets.Struct)]
-struct TunableAttribute
-{
-}
-
 // --- Activation interface and implementations ---
 
 interface IActivation {
