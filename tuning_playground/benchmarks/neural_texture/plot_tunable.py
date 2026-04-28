@@ -40,6 +40,21 @@ def shape_label(s: dict) -> str:
     return f"w{s['hidden_width']},d{s['hidden_depth']}"
 
 
+def row_shape_key(row: dict) -> tuple[int, int, int]:
+    shape = row.get("shape")
+    if shape is not None:
+        return (
+            shape["hidden_width"],
+            shape["hidden_depth"],
+            shape["freq_bands"],
+        )
+    return (
+        row["kWidth"],
+        row["kDepth"],
+        row["kFreqBands"],
+    )
+
+
 def main() -> None:
     meta, rows = load(RESULT)
     if not rows:
@@ -48,13 +63,16 @@ def main() -> None:
     # Group by shape
     by_shape: dict[tuple, list[dict]] = defaultdict(list)
     for r in rows:
-        key = (r["shape"]["hidden_width"], r["shape"]["hidden_depth"],
-               r["shape"]["freq_bands"])
+        key = row_shape_key(r)
         by_shape[key].append(r)
 
     # Deterministic shape order: by width, then depth
     shapes = sorted(by_shape.keys())
-    shape_labels = [f"w{w},d{d}" for (w, d, _) in shapes]
+    show_freq = len({fb for (_, _, fb) in shapes}) > 1
+    shape_labels = [
+        f"w{w},d{d},f{fb}" if show_freq else f"w{w},d{d}"
+        for (w, d, fb) in shapes
+    ]
 
     # All activations seen (stable order across shapes)
     acts = sorted({r["activation"] for r in rows})

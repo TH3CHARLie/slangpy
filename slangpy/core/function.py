@@ -76,6 +76,7 @@ class FunctionBuildInfo:
         self.ray_tracing_max_attribute_size: int = 8
         self.ray_tracing_flags: RayTracingPipelineFlags = RayTracingPipelineFlags.none
         self.link_type_bindings: list[tuple[str, str, str]] = []
+        self.link_int_bindings: list[tuple[str, int]] = []
 
 
 class FunctionNode(NativeFunctionNode):
@@ -362,16 +363,20 @@ class FunctionNode(NativeFunctionNode):
         return CallData(bwds_node, *args, **kwargs)
 
     def with_settings(self, config: Any) -> "FunctionNodeLinkTypeBindings":
-        """Apply link-time type bindings to this function.
+        """Apply link-time type and integer bindings to this function.
 
-        Accepts either a TuningConfig (via its to_link_bindings() method) or
-        an iterable of (tunable_name, interface_name, impl_name) triples.
+        Accepts either a TuningConfig (via its to_link_bindings() and
+        int_bindings() methods) or an iterable of
+        (tunable_name, interface_name, impl_name) triples.
         """
+        int_bindings: list[tuple[str, int]] = []
         if hasattr(config, "to_link_bindings"):
             bindings = config.to_link_bindings()
+            if hasattr(config, "int_bindings"):
+                int_bindings = [(b.tunable_name, b.value) for b in config.int_bindings()]
         else:
             bindings = list(config)
-        return FunctionNodeLinkTypeBindings(self, bindings)
+        return FunctionNodeLinkTypeBindings(self, bindings, int_bindings)
 
     def call_group_shape(self, call_group_shape: Shape):
         """
@@ -561,10 +566,12 @@ class FunctionNodeLinkTypeBindings(FunctionNode):
         self,
         parent: NativeFunctionNode,
         bindings: list[tuple[str, str, str]],
+        int_bindings: list[tuple[str, int]] | None = None,
     ) -> None:
         super().__init__(parent, FunctionNodeType.kernelgen, bindings)
         self._bindings = [(str(t), str(i), str(im)) for (t, i, im) in bindings]
-        canonical = tuple(sorted(self._bindings))
+        self._int_bindings = [(str(n), v) for (n, v) in (int_bindings or [])]
+        canonical = tuple(sorted(self._bindings)) + tuple(sorted(self._int_bindings))
         self.slangpy_signature = f"[link_type_bindings:{canonical}]"
 
     @property
@@ -576,6 +583,10 @@ class FunctionNodeLinkTypeBindings(FunctionNode):
         for b in self._bindings:
             merged[b[0]] = b
         info.link_type_bindings = list(merged.values())
+        merged_int: dict[str, tuple[str, int]] = {b[0]: b for b in info.link_int_bindings}
+        for b in self._int_bindings:
+            merged_int[b[0]] = b
+        info.link_int_bindings = list(merged_int.values())
 
 
 class FunctionNodeCallGroupShape(FunctionNode):

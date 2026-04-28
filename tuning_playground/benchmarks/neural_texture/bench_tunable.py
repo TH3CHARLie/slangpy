@@ -1,34 +1,30 @@
 """Slang-autotuning driver for the neural-texture forward-inference kernel.
 
-Structurally parallel to ``bench.py`` but with one key difference: the
-activation axis is driven through the Slang autotuning infrastructure
-(``[Tunable] extern struct`` + ``TuningSpace.discover`` + ``Tuner.propose``
-+ ``FunctionNode.with_settings``) instead of a Python cartesian product.
+All tunable axes — activation function, network width, depth, and frequency
+bands — are declared in the shader using Slang's link-time specialization:
 
-Width, depth, and frequency-band count remain Python outer-loop axes —
-they're compile-time numeric parameters baked into the Slang module via
-preprocessor defines, not interface impls, so they don't belong in the
-``[Tunable]`` axis. This mirrors how a real user would deploy the system:
-structural axes through Slang interfaces, numeric sizing axes Python-driven.
+  - ``[Tunable] extern struct Act : IBenchAct = TReLU;``
+  - ``[Tunable(16, 32, 64, 128)] extern static const int kWidth = 32;``
 
-The metric is forward-inference throughput (pixels / second). We deliberately
-do NOT retrain per-variant: weights are initialised once (Kaiming-normal) and
-frozen, so every activation variant runs on identical parameters and the only
-timing difference comes from the activation kernel itself. Loss is not
-reported — the existing ``bench.py`` already captures the quality spread via
-training; this driver is purely about demonstrating the tuning system.
+The Python driver discovers the full choice space via reflection, builds the
+cartesian product, and specializes each variant through module linking.
+No preprocessor defines, no Python outer loop over shapes.
+
+The metric is forward-inference throughput (pixels / second). Weights are
+initialised once (Kaiming-normal) and frozen per (width, depth, freq_bands)
+combination — every activation variant for a given shape runs on identical
+parameters.
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import math
 import pathlib
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -39,7 +35,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import slangpy as spy  # noqa: E402
 
 from tuning import ExhaustiveSearch, Tuner  # noqa: E402
-from tuning.config import TuningConfig  # noqa: E402
+from tuning.config import IntTunableBinding, TuningConfig  # noqa: E402
 
 
 THIS_DIR = pathlib.Path(__file__).parent
@@ -87,8 +83,7 @@ def init_params(width: int, depth: int, freq_bands: int, seed: int = 0) -> np.nd
 
 
 # --------------------------------------------------------------------------- #
-# Helpers (target / uv grid) — lifted from bench.py so this driver is
-# self-contained and doesn't depend on bench.py imports.
+# Helpers
 # --------------------------------------------------------------------------- #
 
 
@@ -110,24 +105,25 @@ def upload_params(device: spy.Device, params_np: np.ndarray) -> spy.Buffer:
     )
 
 
+def get_int_binding(cfg: TuningConfig, name: str) -> int:
+    """Extract an integer tunable value from a config by name."""
+    for b in cfg.bindings:
+        if isinstance(b, IntTunableBinding) and b.tunable_name == name:
+            return b.value
+    raise KeyError(f"No integer binding for {name!r} in config")
+
+
 # --------------------------------------------------------------------------- #
-# Config / result
+# Result
 # --------------------------------------------------------------------------- #
-
-
-@dataclass(frozen=True)
-class Shape:
-    hidden_width: int
-    hidden_depth: int
-    freq_bands: int
-
-    def label(self) -> str:
-        return f"w={self.hidden_width},d={self.hidden_depth},fb={self.freq_bands}"
 
 
 @dataclass
 class TrialResult:
-    shape: dict
+    config: str
+    kWidth: int
+    kDepth: int
+    kFreqBands: int
     activation: str
     msamples_per_s: float
     elapsed_seconds: float
@@ -135,114 +131,21 @@ class TrialResult:
 
 
 # --------------------------------------------------------------------------- #
-# Per-shape tuning run
-# --------------------------------------------------------------------------- #
-
-
-def run_shape(
-    device: spy.Device,
-    shape: Shape,
-    uv_grid,
-    *,
-    warmup_calls: int,
-    timed_calls: int,
-    resolution: int,
-) -> list[TrialResult]:
-    """Tune activation for a single (width, depth, freq) shape.
-
-    Returns one TrialResult per activation impl discovered in the module.
-    """
-    header = (
-        f"#define W {shape.hidden_width}\n"
-        f"#define D {shape.hidden_depth}\n"
-        f"#define FB {shape.freq_bands}\n"
-    )
-    source = header + SHADER.read_text()
-    raw_module = device.load_module_from_source(
-        f"bench_net_w{shape.hidden_width}_d{shape.hidden_depth}_fb{shape.freq_bands}",
-        source,
-    )
-
-    tuner = Tuner(model=ExhaustiveSearch())
-    space = tuner.setup(device, raw_module)
-    assert space.size() > 0, f"No tunable configs discovered for shape {shape}"
-
-    module = spy.Module(raw_module)
-    func = module.evalPixel
-
-    # Weights are initialised once and shared across all activation variants.
-    params_np = init_params(shape.hidden_width, shape.hidden_depth, shape.freq_bands)
-    params = upload_params(device, params_np)
-
-    results: list[TrialResult] = []
-
-    while not tuner.is_complete():
-        cfg: TuningConfig = tuner.propose()
-        variant = func.with_settings(cfg)
-
-        # Warm up — first call compiles the kernel & populates CallDataCache.
-        for _ in range(warmup_calls):
-            variant(uv_grid, params)
-        device.wait_for_idle()
-
-        # Time N dispatches.
-        t0 = time.perf_counter()
-        for _ in range(timed_calls):
-            variant(uv_grid, params)
-        device.wait_for_idle()
-        elapsed = time.perf_counter() - t0
-
-        total_samples = timed_calls * (resolution * resolution)
-        msamples = total_samples * 1e-6
-        msamples_per_s = msamples / elapsed if elapsed > 0 else 0.0
-
-        tuner.report(cfg, (elapsed / timed_calls) * 1000)
-
-        # The tunable config has a single binding; extract its impl name.
-        act_name = cfg.bindings[0].impl_name
-        results.append(TrialResult(
-            shape=asdict(shape),
-            activation=act_name,
-            msamples_per_s=msamples_per_s,
-            elapsed_seconds=elapsed,
-            calls=timed_calls,
-        ))
-
-    return results
-
-
-# --------------------------------------------------------------------------- #
-# Sweep
+# Main
 # --------------------------------------------------------------------------- #
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--resolution", type=int, default=256)
-    ap.add_argument("--widths", nargs="+", type=int, default=[16, 32, 64, 128])
-    ap.add_argument("--depths", nargs="+", type=int, default=[2, 3, 4])
-    ap.add_argument("--freq-bands", nargs="+", type=int, default=[6])
     ap.add_argument("--warmup-calls", type=int, default=5)
     ap.add_argument("--timed-calls", type=int, default=50)
     ap.add_argument("--output", type=pathlib.Path,
                     default=THIS_DIR / "results_tunable.jsonl")
     ap.add_argument("--limit", type=int, default=0,
-                    help="run only the first N shapes")
+                    help="run only the first N configs")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-
-    shapes = [
-        Shape(w, d, fb)
-        for w, d, fb in itertools.product(args.widths, args.depths, args.freq_bands)
-    ]
-    if args.limit:
-        shapes = shapes[: args.limit]
-
-    print(f"[sweep] {len(shapes)} shapes × activations (tunable)")
-    if args.dry_run:
-        for s in shapes:
-            print(f"  {s.label()}")
-        return 0
 
     device = spy.create_device(
         spy.DeviceType.vulkan,
@@ -253,10 +156,28 @@ def main() -> int:
     coopvec = spy.Feature.cooperative_vector in device.features
     print(f"[device] {adapter}  coopvec={coopvec}")
 
-    uv_grid = create_uv_grid(device, args.resolution)
+    # Load the module once — all tunables are extern, so defaults are used.
+    raw_module = device.load_module(str(SHADER))
 
-    total_trials = 0
-    with args.output.open("w") as f:
+    # Discover the full tuning space from the shader.
+    tuner = Tuner(model=ExhaustiveSearch())
+    space = tuner.setup(device, raw_module)
+    print(f"[discover] {space}")
+
+    if args.dry_run:
+        for cfg in space.all_configs():
+            print(f"  {cfg}")
+        return 0
+
+    module = spy.Module(raw_module)
+    func = module.evalPixel
+    uv_grid = create_uv_grid(device, args.resolution)
+    output_tmp = args.output.with_name(args.output.name + ".tmp")
+
+    # Cache params per (width, depth, freq_bands) shape to avoid re-init.
+    params_cache: dict[tuple[int, int, int], spy.Buffer] = {}
+
+    with output_tmp.open("w") as f:
         f.write(
             json.dumps(
                 {
@@ -265,11 +186,11 @@ def main() -> int:
                         "resolution": args.resolution,
                         "warmup_calls": args.warmup_calls,
                         "timed_calls": args.timed_calls,
-                        "num_shapes": len(shapes),
+                        "total_configs": space.size(),
                         "driver": "bench_tunable.py",
-                        "tunable_axis": "activation",
+                        "tuning_space": str(space),
                         "note": "forward-inference throughput; fixed Kaiming weights; "
-                                "no training, no loss",
+                                "all axes via link-time specialization",
                     }
                 }
             )
@@ -277,36 +198,90 @@ def main() -> int:
         )
         f.flush()
 
-        for i, shape in enumerate(shapes):
-            try:
-                trials = run_shape(
-                    device, shape, uv_grid,
-                    warmup_calls=args.warmup_calls,
-                    timed_calls=args.timed_calls,
-                    resolution=args.resolution,
-                )
-            except Exception as e:
-                print(f"  [{i+1}/{len(shapes)}] {shape.label()}  FAILED: {type(e).__name__}: {e}")
-                f.write(json.dumps({"shape": asdict(shape),
-                                    "error": f"{type(e).__name__}: {e}"}) + "\n")
-                f.flush()
-                continue
+        results: list[TrialResult] = []
+        trial_idx = 0
+        total = space.size()
+        if args.limit:
+            total = min(total, args.limit)
 
-            for t in trials:
-                f.write(json.dumps(asdict(t)) + "\n")
+        while not tuner.is_complete():
+            if args.limit and trial_idx >= args.limit:
+                break
+
+            cfg: TuningConfig = tuner.propose()
+            trial_idx += 1
+
+            # Extract integer tunables for this config.
+            w = get_int_binding(cfg, "kWidth")
+            d = get_int_binding(cfg, "kDepth")
+            fb = get_int_binding(cfg, "kFreqBands")
+
+            # Get or create params for this shape.
+            shape_key = (w, d, fb)
+            if shape_key not in params_cache:
+                params_np = init_params(w, d, fb)
+                params_cache[shape_key] = upload_params(device, params_np)
+            params = params_cache[shape_key]
+
+            # Link the variant (struct + int tunables resolved via module linking).
+            variant = func.with_settings(cfg)
+
+            # Warm up.
+            for _ in range(args.warmup_calls):
+                variant(uv_grid, params)
+            device.wait_for_idle()
+
+            # Time.
+            t0 = time.perf_counter()
+            for _ in range(args.timed_calls):
+                variant(uv_grid, params)
+            device.wait_for_idle()
+            elapsed = time.perf_counter() - t0
+
+            total_samples = args.timed_calls * (args.resolution * args.resolution)
+            msamples_per_s = (total_samples * 1e-6) / elapsed if elapsed > 0 else 0.0
+
+            tuner.report(cfg, (elapsed / args.timed_calls) * 1000)
+
+            # Extract activation name from struct bindings.
+            struct_bindings = cfg.struct_bindings()
+            act_name = struct_bindings[0].impl_name if struct_bindings else "N/A"
+
+            result = TrialResult(
+                config=str(cfg),
+                kWidth=w,
+                kDepth=d,
+                kFreqBands=fb,
+                activation=act_name,
+                msamples_per_s=msamples_per_s,
+                elapsed_seconds=elapsed,
+                calls=args.timed_calls,
+            )
+            results.append(result)
+
+            f.write(json.dumps({
+                "config": result.config,
+                "kWidth": result.kWidth,
+                "kDepth": result.kDepth,
+                "kFreqBands": result.kFreqBands,
+                "activation": result.activation,
+                "msamples_per_s": result.msamples_per_s,
+                "elapsed_seconds": result.elapsed_seconds,
+                "calls": result.calls,
+            }) + "\n")
             f.flush()
-            total_trials += len(trials)
 
-            thrs = sorted([t.msamples_per_s for t in trials])
-            spread = thrs[-1] / thrs[0] if thrs[0] > 0 else float("inf")
-            fastest = max(trials, key=lambda t: t.msamples_per_s)
             print(
-                f"  [{i+1}/{len(shapes)}] {shape.label()}  "
-                f"n_act={len(trials)}  thr {thrs[0]:.1f}–{thrs[-1]:.1f} MS/s  "
-                f"spread {spread:.2f}×  fastest={fastest.activation}"
+                f"  [{trial_idx}/{total}] w={w},d={d},fb={fb} act={act_name}  "
+                f"{msamples_per_s:.1f} MS/s"
             )
 
-    print(f"\n[done] {total_trials} trials written to {args.output}")
+    output_tmp.replace(args.output)
+
+    best = tuner.best()
+    best_result = min(tuner.history, key=lambda r: r.elapsed_ms)
+    print(f"\n[done] {len(results)} trials written to {args.output}")
+    print(f"[best] {best}  ({best_result.elapsed_ms:.2f} ms)")
     return 0
 
 

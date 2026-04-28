@@ -1,33 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Self-contained neural-texture forward-inference kernel for the Slang
-// autotuning benchmark. The activation function is exposed as a single
-// [Tunable] extern struct so the Python side can enumerate impls via
-// TuningSpace.discover() and specialize per trial using
-// FunctionNode.with_settings().
+// autotuning benchmark.
 //
-// Width (W), depth (D), and frequency-encoding band count (FB) are fixed at
-// module-load time via preprocessor defines. The Python driver reloads the
-// module per (W, D, FB) outer-loop point; activation is the inner tunable
-// axis, keyed through the slangpy CallDataCache on the link bindings.
+// All tunable axes are declared with Slang's link-time specialization:
+//   - Activation function: [Tunable] extern struct (interface-based)
+//   - Width, depth, freq bands: [Tunable(choices)] extern static const int
+//
+// The Python driver discovers the full choice space via reflection and
+// specializes each variant through module linking — no preprocessor defines.
 
 import slangpy;
 
-#ifndef W
-#define W 32
-#endif
-#ifndef D
-#define D 2
-#endif
-#ifndef FB
-#define FB 6
-#endif
+[Tunable(16, 32, 64, 128)]
+public extern static const int kWidth = 32;
 
-static const int kWidth = W;
-static const int kDepth = D;
-static const int kFreqBands = FB;
+[Tunable(2, 3, 4)]
+public extern static const int kDepth = 2;
+
+[Tunable(6)]
+public extern static const int kFreqBands = 6;
+
 // Frequency encoding: raw xy (2) + {sin,cos} * {x,y} * FB bands
-static const int kInputDim = 2 + 4 * FB;
+static const int kInputDim = 2 + 4 * kFreqBands;
 
 // --------------------------------------------------------------------------- //
 // Tunable activation

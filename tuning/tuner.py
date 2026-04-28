@@ -113,7 +113,9 @@ class Tuner:
         if self._device is None or self._module is None:
             raise RuntimeError("Call setup() before get_variant()")
         if config not in self._variant_cache:
+            int_bindings = {b.tunable_name: b.value for b in config.int_bindings()}
             self._variant_cache[config] = link_variant(
-                self._device, self._module, config.to_bindings_dict()
+                self._device, self._module, config.to_bindings_dict(),
+                int_bindings=int_bindings or None,
             )
         return self._variant_cache[config]

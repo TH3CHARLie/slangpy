@@ -98,6 +98,7 @@ SGL_PY_EXPORT(device_reflection)
         .def_prop_ro("name", &Attribute::name, D(Attribute, name))
         .def_prop_ro("argument_count", &Attribute::argument_count, D(Attribute, argument_count))
         .def("argument_type", &Attribute::argument_type, "index"_a, D(Attribute, argument_type))
+        .def("argument_value_int", &Attribute::argument_value_int, "index"_a)
         .def("__repr__", &Attribute::to_string);
 
     nb::class_<TypeReflection, BaseReflectionObject> type_reflection(m, "TypeReflection", D(TypeReflection));
@@ -201,7 +202,9 @@ SGL_PY_EXPORT(device_reflection)
     nb::class_<VariableReflection, BaseReflectionObject>(m, "VariableReflection")
         .def_prop_ro("name", &VariableReflection::name, D(VariableReflection, name))
         .def_prop_ro("type", &VariableReflection::type, D(VariableReflection, type))
-        .def("has_modifier", &VariableReflection::has_modifier, "modifier"_a, D(VariableReflection, has_modifier));
+        .def("has_modifier", &VariableReflection::has_modifier, "modifier"_a, D(VariableReflection, has_modifier))
+        .def_prop_ro("user_attribute_count", &VariableReflection::get_user_attribute_count)
+        .def("get_user_attribute_by_index", &VariableReflection::get_user_attribute_by_index, "index"_a);
 
     nb::class_<VariableLayoutReflection, BaseReflectionObject>(
         m,
