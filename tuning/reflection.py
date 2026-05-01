@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import slangpy as spy
@@ -20,9 +21,61 @@ def find_tunable_decls(module: SlangModule) -> list[DeclReflection]:
     results = []
     for decl in root.children_of_kind(spy.DeclReflection.Kind.struct):
         if decl.has_modifier(spy.ModifierID.extern):
-            type_refl = decl.as_type()
-            if type_refl and type_refl.find_user_attribute_by_name("Tunable"):
+            if decl.has_modifier(spy.ModifierID.tunable):
                 results.append(decl)
+    return results
+
+
+@dataclass
+class IntTunableInfo:
+    """Describes a [Tunable(choices...)] integer variable discovered via reflection."""
+
+    variable_name: str
+    choices: list[int]
+
+
+def find_tunable_int_decls(module: SlangModule) -> list[IntTunableInfo]:
+    """Return all [Tunable(choices...)] integer variable declarations in a module.
+
+    Finds ``[Tunable(choices...)] extern static const int`` variable declarations,
+    then reads the integer argument values from the attribute to determine the
+    choice space.
+
+    :param module: A loaded Slang module.
+    :return: List of IntTunableInfo with variable name and integer choices.
+    """
+    root = module.module_decl
+    results = []
+    for decl in root.children_of_kind(spy.DeclReflection.Kind.variable):
+        if not decl.has_modifier(spy.ModifierID.tunable):
+            continue
+        var = decl.as_variable()
+        if var is None:
+            continue
+        if not (
+            decl.has_modifier(spy.ModifierID.extern)
+            and decl.has_modifier(spy.ModifierID.static)
+            and decl.has_modifier(spy.ModifierID.const)
+        ):
+            continue
+        if (
+            var.type.kind != spy.TypeReflection.Kind.scalar
+            or var.type.scalar_type != spy.TypeReflection.ScalarType.int32
+        ):
+            continue
+        # Find the Tunable attribute and read its int arguments.
+        attr = None
+        for i in range(var.user_attribute_count):
+            a = var.get_user_attribute_by_index(i)
+            if a.name == "Tunable":
+                attr = a
+                break
+        if attr is None or attr.argument_count == 0:
+            continue
+        choices = list(
+            dict.fromkeys(attr.argument_value_int(i) for i in range(attr.argument_count))
+        )
+        results.append(IntTunableInfo(variable_name=var.name, choices=choices))
     return results
 
 
@@ -93,16 +146,19 @@ def link_variant(
     device: spy.Device,
     module: spy.SlangModule,
     bindings: dict[str, tuple[str, str]],
+    int_bindings: dict[str, int] | None = None,
 ) -> spy.Module:
-    """Create a Module variant by binding one or more tunables to implementations.
+    """Create a Module variant by binding tunables to concrete values.
 
-    Returns a SlangPy Module with the export linkage applied, so functions
-    can be called directly via the functional API (e.g. ``variant.add(2.0, 3)``).
+    Generates a Slang source module with ``export`` declarations for both
+    struct tunables (``export struct X : I = Impl;``) and integer tunables
+    (``export static const int X = N;``), then links it against the base module.
 
     :param device: The GPU device.
-    :param module: The loaded Slang module containing the tunables and implementations.
-    :param bindings: Mapping of tunable_name -> (interface_name, impl_name).
-    :return: A SlangPy Module with the specified implementations linked in.
+    :param module: The loaded Slang module containing the tunables.
+    :param bindings: Mapping of tunable_name -> (interface_name, impl_name) for struct tunables.
+    :param int_bindings: Mapping of tunable_name -> int value for integer tunables.
+    :return: A SlangPy Module with the specified bindings linked in.
     """
     module_name = module.name
     lines = [f'import "{module_name}";']
@@ -110,6 +166,10 @@ def link_variant(
     for tunable_name, (interface_name, impl_name) in bindings.items():
         lines.append(f"export struct {tunable_name} : {interface_name} = {impl_name};")
         name_parts.append(f"{tunable_name}_{impl_name}")
+    if int_bindings:
+        for tunable_name, value in int_bindings.items():
+            lines.append(f"export static const int {tunable_name} = {value};")
+            name_parts.append(f"{tunable_name}_{value}")
     additional_source = "\n".join(lines)
     export_module = device.load_module_from_source(
         "_".join(name_parts), additional_source

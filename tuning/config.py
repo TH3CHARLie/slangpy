@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from slangpy import SlangModule
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class TunableBinding:
-    """One tunable bound to one implementation."""
+    """One struct tunable bound to one implementation."""
 
     tunable_name: str
     interface_name: str
@@ -20,6 +20,21 @@ class TunableBinding:
 
     def __str__(self) -> str:
         return f"{self.tunable_name}={self.impl_name}"
+
+
+@dataclass(frozen=True)
+class IntTunableBinding:
+    """One integer tunable bound to a specific value."""
+
+    tunable_name: str
+    value: int
+
+    def __str__(self) -> str:
+        return f"{self.tunable_name}={self.value}"
+
+
+# A binding is either a struct or int tunable choice.
+AnyBinding = Union[TunableBinding, IntTunableBinding]
 
 
 @dataclass
@@ -34,6 +49,24 @@ class TunableParam:
         return f"{self.tunable_name}: {self.interface_name} -> [{', '.join(self.impl_names)}]"
 
 
+@dataclass
+class IntTunableParam:
+    """One integer tunable axis: an extern static const int with discrete choices."""
+
+    tunable_name: str
+    choices: list[int]
+
+    def __post_init__(self) -> None:
+        self.choices = list(dict.fromkeys(self.choices))
+
+    def __str__(self) -> str:
+        return f"{self.tunable_name}: int -> [{', '.join(str(c) for c in self.choices)}]"
+
+
+# A param is either a struct or int tunable axis.
+AnyParam = Union[TunableParam, IntTunableParam]
+
+
 @dataclass(frozen=True)
 class TuningConfig:
     """A complete set of tunable bindings. One point in the tuning space.
@@ -41,17 +74,31 @@ class TuningConfig:
     Immutable and hashable so it can be used as a dict key.
     """
 
-    bindings: tuple[TunableBinding, ...]
+    bindings: tuple[AnyBinding, ...]
+
+    def struct_bindings(self) -> list[TunableBinding]:
+        """Return only the struct tunable bindings."""
+        return [b for b in self.bindings if isinstance(b, TunableBinding)]
+
+    def int_bindings(self) -> list[IntTunableBinding]:
+        """Return only the integer tunable bindings."""
+        return [b for b in self.bindings if isinstance(b, IntTunableBinding)]
 
     def to_bindings_dict(self) -> dict[str, tuple[str, str]]:
-        """Convert to the format link_variant() expects."""
+        """Convert struct bindings to the format link_variant() expects."""
         return {
-            b.tunable_name: (b.interface_name, b.impl_name) for b in self.bindings
+            b.tunable_name: (b.interface_name, b.impl_name)
+            for b in self.bindings
+            if isinstance(b, TunableBinding)
         }
 
     def to_link_bindings(self) -> list[tuple[str, str, str]]:
-        """Convert to the list of triples that FunctionNode.with_settings() expects."""
-        return [(b.tunable_name, b.interface_name, b.impl_name) for b in self.bindings]
+        """Convert struct bindings to the list of triples that FunctionNode.with_settings() expects."""
+        return [
+            (b.tunable_name, b.interface_name, b.impl_name)
+            for b in self.bindings
+            if isinstance(b, TunableBinding)
+        ]
 
     def __str__(self) -> str:
         return ",".join(str(b) for b in self.bindings)
@@ -69,40 +116,55 @@ class TuningResult:
 class TuningSpace:
     """The full tuning space for a module — all tunables and their options."""
 
-    def __init__(self, params: list[TunableParam]) -> None:
+    def __init__(self, params: list[AnyParam]) -> None:
         self.params = params
 
     @staticmethod
     def discover(module: SlangModule) -> TuningSpace:
         """Build from a loaded module using Slang reflection.
 
-        :param module: A loaded Slang module.
-        :return: A TuningSpace describing all [Tunable] extern structs and their options.
-        """
-        from .reflection import discover_tuning_space
+        Discovers both [Tunable] extern struct (interface) tunables and
+        [Tunable(choices...)] extern static const int tunables.
 
+        :param module: A loaded Slang module.
+        :return: A TuningSpace describing all tunable axes and their options.
+        """
+        from .reflection import discover_tuning_space, find_tunable_int_decls
+
+        params: list[AnyParam] = []
+
+        # Struct tunables (interface-based).
         raw = discover_tuning_space(module)
-        params: list[TunableParam] = []
         for tunable_name, interfaces in raw.items():
             for interface_name, impl_names in interfaces.items():
                 params.append(TunableParam(tunable_name, interface_name, impl_names))
                 break  # one interface per tunable
+
+        # Integer tunables.
+        for info in find_tunable_int_decls(module):
+            params.append(IntTunableParam(info.variable_name, info.choices))
+
         return TuningSpace(params)
 
     def all_configs(self) -> list[TuningConfig]:
         """Enumerate every combinatorial config (cartesian product)."""
         if not self.params:
             return []
-        impl_lists = [
-            [
-                TunableBinding(p.tunable_name, p.interface_name, impl)
-                for impl in p.impl_names
-            ]
-            for p in self.params
-        ]
+        binding_lists: list[list[AnyBinding]] = []
+        for p in self.params:
+            if isinstance(p, TunableParam):
+                binding_lists.append([
+                    TunableBinding(p.tunable_name, p.interface_name, impl)
+                    for impl in p.impl_names
+                ])
+            else:
+                binding_lists.append([
+                    IntTunableBinding(p.tunable_name, val)
+                    for val in p.choices
+                ])
         return [
             TuningConfig(bindings=tuple(combo))
-            for combo in itertools.product(*impl_lists)
+            for combo in itertools.product(*binding_lists)
         ]
 
     def size(self) -> int:
@@ -111,7 +173,10 @@ class TuningSpace:
             return 0
         n = 1
         for p in self.params:
-            n *= len(p.impl_names)
+            if isinstance(p, TunableParam):
+                n *= len(p.impl_names)
+            else:
+                n *= len(p.choices)
         return n
 
     def __str__(self) -> str:

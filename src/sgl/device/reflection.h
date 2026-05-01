@@ -56,6 +56,7 @@ enum class ModifierID {
     in = slang::Modifier::ID::In,
     out = slang::Modifier::ID::Out,
     inout = slang::Modifier::ID::InOut,
+    tunable = slang::Modifier::ID::Tunable,
 };
 
 SGL_ENUM_INFO(
@@ -72,6 +73,7 @@ SGL_ENUM_INFO(
         {ModifierID::in, "inn"},
         {ModifierID::out, "out"},
         {ModifierID::inout, "inout"},
+        {ModifierID::tunable, "tunable"},
     }
 );
 SGL_ENUM_REGISTER(ModifierID);
@@ -370,6 +372,17 @@ public:
     ref<const TypeReflection> argument_type(uint32_t index) const
     {
         return detail::from_slang(m_owner, slang_target()->getArgumentType(index));
+    }
+
+    /// Get the integer value of an argument at the given index.
+    /// Returns the value on success, throws on failure.
+    int argument_value_int(uint32_t index) const
+    {
+        int value = 0;
+        SlangResult result = slang_target()->getArgumentValueInt(index, &value);
+        if (SLANG_FAILED(result))
+            SGL_THROW("Failed to get integer argument value at index {}", index);
+        return value;
     }
 
     std::string to_string() const;
@@ -967,6 +980,15 @@ public:
     bool has_modifier(ModifierID modifier) const
     {
         return slang_target()->findModifier(static_cast<slang::Modifier::ID>(modifier)) != nullptr;
+    }
+
+    /// Number of user attributes on this variable.
+    uint32_t get_user_attribute_count() const { return slang_target()->getUserAttributeCount(); }
+
+    /// Get a user attribute by index.
+    ref<const Attribute> get_user_attribute_by_index(uint32_t index) const
+    {
+        return detail::from_slang(m_owner, slang_target()->getUserAttributeByIndex(index));
     }
 };
 
