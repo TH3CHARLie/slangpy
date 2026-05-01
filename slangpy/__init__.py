@@ -22,6 +22,10 @@ from importlib import import_module as _import
 _import("slangpy.slangpy_ext")
 del _import
 
+if "get_torch_bridge_fallback_reason" not in globals():
+    def get_torch_bridge_fallback_reason():
+        return "torch bridge fallback reason is unavailable in this native build"
+
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 # pyright: reportUnusedImport=false
 # isort: skip_file

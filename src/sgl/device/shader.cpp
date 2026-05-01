@@ -189,7 +189,8 @@ SlangSession::SlangSession(ref<Device> device, SlangSessionDesc desc)
 
     // Create (but don't compile yet) the NVAPI module
     // We link this to all programs because slang uses NVAPI features while not including NVAPI itself.
-    if (SGL_HAS_NVAPI && m_device->type() == DeviceType::d3d12) {
+#if SGL_HAS_NVAPI
+    if (m_device->type() == DeviceType::d3d12) {
         m_nvapi_module = make_ref<SlangModule>(
             ref(this),
             SlangModuleDesc{
@@ -198,6 +199,7 @@ SlangSession::SlangSession(ref<Device> device, SlangSessionDesc desc)
         );
         m_nvapi_module->break_strong_reference_to_session();
     }
+#endif
 
     recreate_session();
 }
@@ -285,6 +287,10 @@ void SlangSession::create_session(SlangSessionBuild& build)
     // Example: entry point 'foo' uses additional capabilities that are not part of the specified profile 'unknown'.
     // This warning happens on CUDA because we're not properly setting the target profile (i.e. "cuda_sm_x_x").
     session_options.add(slang::CompilerOptionName::DisableWarning, std::string_view("41012"));
+    // TODO: Globally disable warnings 31106 and 31107.
+    // SlangPy's generated parameter groups can intentionally let special resource members split into separate bindings.
+    session_options.add(slang::CompilerOptionName::DisableWarning, std::string_view("31106"));
+    session_options.add(slang::CompilerOptionName::DisableWarning, std::string_view("31107"));
 
     // Set warnings.
     for (const auto& warning : options.enable_warnings)
@@ -579,8 +585,10 @@ ref<ShaderProgram> SlangSession::link_program(
     }
 
     // Link NVAPI module if available.
-    if (SGL_HAS_NVAPI && m_device->type() == DeviceType::d3d12)
+#if SGL_HAS_NVAPI
+    if (m_device->type() == DeviceType::d3d12)
         modules.push_back(m_nvapi_module);
+#endif
 
     // Generate label
     std::string label;
