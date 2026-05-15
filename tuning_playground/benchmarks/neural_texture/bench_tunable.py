@@ -1,14 +1,17 @@
 """Slang-autotuning driver for the neural-texture forward-inference kernel.
 
-All tunable axes — activation function, network width, depth, and frequency
-bands — are declared in the shader using Slang's link-time specialization:
+The tunable axes are split across two Slang files using link-time
+specialization:
 
   - ``[Tunable] extern struct Act : IBenchAct = TReLU;``
   - ``[Tunable(16, 32, 64, 128)] extern static const int kWidth = 32;``
 
-The Python driver discovers the full choice space via reflection, builds the
-cartesian product, and specializes each variant through module linking.
-No preprocessor defines, no Python outer loop over shapes.
+The imported ``activation.slang`` file owns the structural activation
+tunable. The benchmark entrypoint ``bench_net.slang`` owns the numeric width,
+depth, and frequency-band tunables. The Python driver loads ``bench_net.slang``,
+discovers the combined choice space via reflection, builds the cartesian
+product, and specializes each variant through module linking. No preprocessor
+defines, no Python outer loop over shapes.
 
 The metric is forward-inference throughput (pixels / second). Weights are
 initialised once (Kaiming-normal) and frozen per (width, depth, freq_bands)
@@ -34,7 +37,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import slangpy as spy  # noqa: E402
 
-from tuning import ExhaustiveSearch, Tuner  # noqa: E402
+from tuning import ExhaustiveSearch, RandomSearch, Tuner  # noqa: E402
 from tuning.config import IntTunableBinding, TuningConfig  # noqa: E402
 
 
@@ -130,6 +133,14 @@ class TrialResult:
     calls: int
 
 
+def make_tuning_model(strategy: str, budget: int | None, seed: int):
+    if strategy == "exhaustive":
+        return ExhaustiveSearch()
+    if strategy == "random":
+        return RandomSearch(budget=budget, seed=seed)
+    raise ValueError(f"unknown strategy: {strategy}")
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -144,6 +155,11 @@ def main() -> int:
                     default=THIS_DIR / "results_tunable.jsonl")
     ap.add_argument("--limit", type=int, default=0,
                     help="run only the first N configs")
+    ap.add_argument("--strategy", choices=["exhaustive", "random"], default="exhaustive")
+    ap.add_argument("--budget", type=int, default=0,
+                    help="maximum configs for --strategy random; 0 means no budget")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="random seed for --strategy random")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -160,13 +176,24 @@ def main() -> int:
     raw_module = device.load_module(str(SHADER))
 
     # Discover the full tuning space from the shader.
-    tuner = Tuner(model=ExhaustiveSearch())
+    model = make_tuning_model(
+        args.strategy,
+        args.budget if args.strategy == "random" and args.budget else None,
+        args.seed,
+    )
+    tuner = Tuner(model=model)
     space = tuner.setup(device, raw_module)
     print(f"[discover] {space}")
 
     if args.dry_run:
-        for cfg in space.all_configs():
+        trial_idx = 0
+        while not tuner.is_complete():
+            if args.limit and trial_idx >= args.limit:
+                break
+            cfg = tuner.propose()
+            trial_idx += 1
             print(f"  {cfg}")
+        print(f"[dry-run] strategy={args.strategy} configs={trial_idx}")
         return 0
 
     module = spy.Module(raw_module)
@@ -176,6 +203,11 @@ def main() -> int:
 
     # Cache params per (width, depth, freq_bands) shape to avoid re-init.
     params_cache: dict[tuple[int, int, int], spy.Buffer] = {}
+    total = space.size()
+    if args.strategy == "random" and args.budget:
+        total = min(total, args.budget)
+    if args.limit:
+        total = min(total, args.limit)
 
     with output_tmp.open("w") as f:
         f.write(
@@ -187,6 +219,14 @@ def main() -> int:
                         "warmup_calls": args.warmup_calls,
                         "timed_calls": args.timed_calls,
                         "total_configs": space.size(),
+                        "strategy": args.strategy,
+                        "budget": (
+                            args.budget
+                            if args.strategy == "random" and args.budget
+                            else None
+                        ),
+                        "seed": args.seed if args.strategy == "random" else None,
+                        "planned_evaluations": total,
                         "driver": "bench_tunable.py",
                         "tuning_space": str(space),
                         "note": "forward-inference throughput; fixed Kaiming weights; "
@@ -200,9 +240,6 @@ def main() -> int:
 
         results: list[TrialResult] = []
         trial_idx = 0
-        total = space.size()
-        if args.limit:
-            total = min(total, args.limit)
 
         while not tuner.is_complete():
             if args.limit and trial_idx >= args.limit:
