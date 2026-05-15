@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Self-contained neural-texture forward-inference kernel for the Slang
-// autotuning benchmark.
+// Neural-texture forward-inference kernel for the Slang autotuning benchmark.
 //
-// All tunable axes are declared with Slang's link-time specialization:
-//   - Activation function: [Tunable] extern struct (interface-based)
-//   - Width, depth, freq bands: [Tunable(choices)] extern static const int
+// Tunable axes are split across modules:
+//   - Activation function is imported from activation.slang.
+//   - Width, depth, and frequency bands are declared in this entrypoint module.
 //
 // The Python driver discovers the full choice space via reflection and
 // specializes each variant through module linking — no preprocessor defines.
 
 import slangpy;
+import activation;
 
 [Tunable(16, 32, 64, 128)]
 public extern static const int kWidth = 32;
@@ -23,60 +23,6 @@ public extern static const int kFreqBands = 6;
 
 // Frequency encoding: raw xy (2) + {sin,cos} * {x,y} * FB bands
 static const int kInputDim = 2 + 4 * kFreqBands;
-
-// --------------------------------------------------------------------------- //
-// Tunable activation
-// --------------------------------------------------------------------------- //
-
-public interface IBenchAct
-{
-    float apply(float x);
-}
-
-public struct TReLU : IBenchAct
-{
-    public float apply(float x) { return max(x, 0.0f); }
-}
-
-public struct TLeakyReLU : IBenchAct
-{
-    public float apply(float x) { return x >= 0.0f ? x : 0.01f * x; }
-}
-
-public struct TELU : IBenchAct
-{
-    public float apply(float x) { return x >= 0.0f ? x : (exp(x) - 1.0f); }
-}
-
-public struct TSmeLU : IBenchAct
-{
-    // Smooth ReLU: quadratic in a small transition band around 0.
-    public float apply(float x)
-    {
-        const float beta = 0.5f;
-        if (x <= -beta) return 0.0f;
-        if (x >= beta) return x;
-        float t = x + beta;
-        return (t * t) / (4.0f * beta);
-    }
-}
-
-public struct TSwish : IBenchAct
-{
-    public float apply(float x) { return x / (1.0f + exp(-x)); }
-}
-
-public struct TTanh : IBenchAct
-{
-    public float apply(float x) { return tanh(x); }
-}
-
-public struct TSigmoid : IBenchAct
-{
-    public float apply(float x) { return 1.0f / (1.0f + exp(-x)); }
-}
-
-[Tunable] public extern struct Act : IBenchAct = TReLU;
 
 // --------------------------------------------------------------------------- //
 // Forward MLP

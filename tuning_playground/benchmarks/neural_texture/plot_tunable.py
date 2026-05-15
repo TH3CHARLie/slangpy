@@ -1,12 +1,12 @@
 """Plot the tunable-driven neural_texture sweep.
 
-Left:   per-shape grouped bar chart of throughput across the 7 activation
-        impls. The fastest activation per shape is outlined in black.
-Right:  per-shape spread (max/min throughput) — how much the activation
-        choice actually matters at each (width, depth).
+Output 1: per-shape grouped bar chart of throughput across activation impls.
+          The fastest activation per shape is outlined in black.
+Output 2: per-shape spread (max/min throughput) — how much the activation
+          choice actually matters at each (width, depth).
 
 Input:  results_tunable.jsonl (produced by bench_tunable.py).
-Output: spread_tunable.png.
+Output: throughput_tunable.png and spread_tunable.png.
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ import numpy as np
 
 THIS_DIR = pathlib.Path(__file__).parent
 RESULT = THIS_DIR / "results_tunable.jsonl"
-OUT = THIS_DIR / "spread_tunable.png"
+OUT_THROUGHPUT = THIS_DIR / "throughput_tunable.png"
+OUT_SPREAD = THIS_DIR / "spread_tunable.png"
 
 
 def load(path: pathlib.Path) -> tuple[dict, list[dict]]:
@@ -79,14 +80,13 @@ def main() -> None:
     cmap = plt.get_cmap("tab10")
     colors = {a: cmap(i) for i, a in enumerate(acts)}
 
-    fig, (ax_bar, ax_spread) = plt.subplots(1, 2, figsize=(14, 5.4))
-
     # --- Grouped bar: one group per shape, one bar per activation ---
     n_acts = len(acts)
     group_width = 0.8
     bar_w = group_width / n_acts
     x_base = np.arange(len(shapes))
 
+    fig_bar, ax_bar = plt.subplots(figsize=(7.2, 4.4))
     for ai, a in enumerate(acts):
         ys = []
         for key in shapes:
@@ -109,9 +109,11 @@ def main() -> None:
     ax_bar.set_xticklabels(shape_labels, rotation=30)
     ax_bar.set_ylabel("Throughput (MSamples/s)")
     ax_bar.set_yscale("log")
-    ax_bar.set_title("Throughput per activation, per shape  (black outline = winner)")
-    ax_bar.legend(loc="upper right", fontsize=8, ncol=2)
+    ax_bar.set_title("Throughput by activation")
+    ax_bar.legend(loc="upper right", fontsize=8, ncol=2, frameon=False)
     ax_bar.grid(True, axis="y", which="both", alpha=0.3)
+    fig_bar.tight_layout()
+    fig_bar.savefig(OUT_THROUGHPUT, dpi=150)
 
     # --- Per-shape spread bar ---
     spreads = []
@@ -119,6 +121,7 @@ def main() -> None:
         ts = [r["msamples_per_s"] for r in by_shape[key]]
         spreads.append(max(ts) / min(ts) if min(ts) > 0 else 1.0)
 
+    fig_spread, ax_spread = plt.subplots(figsize=(6.4, 4.0))
     bars = ax_spread.bar(x_base, spreads, color="#b0c4de", edgecolor="black",
                          linewidth=0.5)
     for rect, s in zip(bars, spreads):
@@ -129,26 +132,18 @@ def main() -> None:
     ax_spread.set_xticks(x_base)
     ax_spread.set_xticklabels(shape_labels, rotation=30)
     ax_spread.set_ylabel("Activation spread (max / min throughput)")
-    ax_spread.set_title("How much does activation choice matter?")
+    ax_spread.set_title("Activation throughput spread")
     ax_spread.grid(True, axis="y", alpha=0.3)
     ax_spread.set_ylim(1.0, max(spreads) * 1.15)
+    fig_spread.tight_layout()
+    fig_spread.savefig(OUT_SPREAD, dpi=150)
 
-    # --- Headline ---
     all_thr = [r["msamples_per_s"] for r in rows]
     global_spread = max(all_thr) / min(all_thr)
-    adapter = (meta or {}).get("adapter", "unknown GPU")
     n_winners = len({max(by_shape[k], key=lambda r: r["msamples_per_s"])["activation"]
                      for k in shapes})
-    fig.suptitle(
-        f"Slang autotuning — activation axis on neural_texture "
-        f"({len(rows)} trials / {len(shapes)} shapes / {n_acts} activations, {adapter})  "
-        f"| global thr spread {global_spread:.1f}×  | {n_winners} distinct winners",
-        fontsize=11,
-    )
-
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-    fig.savefig(OUT, dpi=150)
-    print(f"wrote {OUT}")
+    print(f"wrote {OUT_THROUGHPUT}")
+    print(f"wrote {OUT_SPREAD}")
     print(f"  shapes: {len(shapes)}  trials: {len(rows)}  "
           f"global thr {min(all_thr):.1f}–{max(all_thr):.1f} MS/s "
           f"(spread {global_spread:.1f}×)")

@@ -42,3 +42,10 @@ src/slangpy_torch/build/
 __pycache__/
 
 src/slangpy_torch/dist/
+
+# Tuning playground generated benchmark outputs.
+tuning_playground/benchmarks/**/results*.jsonl
+tuning_playground/benchmarks/**/*.png
+tuning_playground/benchmarks/**/*_table.md
+tuning_playground/benchmarks/**/resource_stats*.json
+opentuner.log
