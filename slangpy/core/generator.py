@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 from typing import TYPE_CHECKING, Any
+import re
 import warnings
 
 from slangpy.bindings.codegen import CodeGen, CodeGenBlock
@@ -15,12 +16,37 @@ if TYPE_CHECKING:
 #: to keep generated entry-point params and ``CallData`` fields readable.
 #: Shorter names are inlined directly.
 MAX_INLINE_TYPE_LEN = 60
+_IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")\s*;", re.MULTILINE)
 
 
 class KernelGenException(Exception):
     def __init__(self, message: str):
         super().__init__(message)
         self.message = message
+
+
+def _strip_line_comments(source: str) -> str:
+    return "\n".join(line.split("//", 1)[0] for line in source.splitlines())
+
+
+def _source_import_names(module: Any) -> list[str]:
+    """Return direct imports from a Slang module source file."""
+    path = getattr(module, "path", None)
+    if not path:
+        return []
+    try:
+        source = path.read_text()
+    except OSError:
+        return []
+
+    names = []
+    for match in _IMPORT_RE.finditer(_strip_line_comments(source)):
+        raw = match.group(1)
+        name = raw[1:-1] if raw.startswith('"') else raw
+        if name == "slangpy":
+            continue
+        names.append(name)
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +161,9 @@ def _emit_external_structs(build_info: "FunctionBuildInfo", cg: CodeGen) -> None
     These provide link-time definitions for matching ``extern`` declarations
     in the main module.
     """
+    source_module = getattr(build_info.module, "source_module", build_info.module.device_module)
+    for import_name in _source_import_names(source_module):
+        cg.add_import(import_name)
     for tunable_name, interface_name, impl_name in build_info.link_type_bindings:
         cg.constants.append_statement(
             f"export struct {tunable_name} : {interface_name} = {impl_name}"
@@ -768,6 +797,11 @@ def _emit_entry_point_signature(
         cg.kernel.append_line('[shader("compute")]')
         if call_group_size != 1:
             cg.kernel.append_line(f"[numthreads({call_group_size}, 1, 1)]")
+        elif build_info.thread_group_size is not None:
+            thread_group_size = build_info.thread_group_size
+            cg.kernel.append_line(
+                f"[numthreads({thread_group_size.x}, {thread_group_size.y}, {thread_group_size.z})]"
+            )
         else:
             cg.kernel.append_line("[numthreads(32, 1, 1)]")
         if use_entrypoint_args:

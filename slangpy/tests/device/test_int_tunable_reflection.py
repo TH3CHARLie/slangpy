@@ -120,6 +120,41 @@ public int eval(int x)
 """
 
 
+IMPORTED_TUNABLE_SOURCE = """
+public interface IImportedOp
+{
+    int apply(int x);
+}
+
+public struct AddOne : IImportedOp
+{
+    public int apply(int x) { return x + 1; }
+}
+
+public struct DoubleIt : IImportedOp
+{
+    public int apply(int x) { return x * 2; }
+}
+
+[Tunable]
+public extern struct ImportedOp : IImportedOp = AddOne;
+"""
+
+
+IMPORTING_TUNABLE_SOURCE = """
+import slangpy;
+import imported_tunables;
+
+[Tunable(2, 4)]
+public extern static const int ImportedScale = 2;
+
+public int eval(int x)
+{
+    return (ImportedOp()).apply(x) * ImportedScale;
+}
+"""
+
+
 def test_tuning_space_enumerates_mixed_struct_and_int_axes():
     """TuningSpace should include integer axes in size() and all_configs()."""
     space = TuningSpace(
@@ -231,6 +266,57 @@ def test_tuning_space_discover_mixed_module(test_id: str, device_type: spy.Devic
     assert isinstance(space.params[1], IntTunableParam)
     assert space.params[1].tunable_name == "TunableScale"
     assert space.params[1].choices == [2, 4]
+
+
+@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
+def test_tuning_space_discovers_imported_tunables(
+    test_id: str, device_type: spy.DeviceType, tmp_path: pathlib.Path
+):
+    """Imported modules should contribute tunables to the reflected space."""
+    device = helpers.get_device(type=device_type)
+    include_paths = [
+        *device.slang_session.desc.compiler_options.include_paths,
+        tmp_path,
+    ]
+    session = device.create_slang_session(
+        compiler_options={
+            "include_paths": include_paths,
+            "debug_info": spy.SlangDebugInfoLevel.standard,
+        }
+    )
+    (tmp_path / "imported_tunables.slang").write_text(IMPORTED_TUNABLE_SOURCE)
+    (tmp_path / "importing_tunables.slang").write_text(IMPORTING_TUNABLE_SOURCE)
+    raw_module = session.load_module("importing_tunables")
+
+    space = TuningSpace.discover(raw_module)
+
+    assert space.size() == 4
+    assert len(space.params) == 2
+    assert isinstance(space.params[0], TunableParam)
+    assert space.params[0].tunable_name == "ImportedOp"
+    assert space.params[0].impl_names == ["AddOne", "DoubleIt"]
+    assert isinstance(space.params[1], IntTunableParam)
+    assert space.params[1].tunable_name == "ImportedScale"
+    assert space.params[1].choices == [2, 4]
+
+    module = Module(raw_module)
+    cfg = TuningConfig(
+        bindings=(
+            TunableBinding("ImportedOp", "IImportedOp", "DoubleIt"),
+            IntTunableBinding("ImportedScale", 4),
+        )
+    )
+
+    assert module.eval(3) == 8
+    assert module.eval.with_settings(cfg)(3) == 24
+
+    linked = link_variant(
+        device,
+        raw_module,
+        bindings={"ImportedOp": ("IImportedOp", "DoubleIt")},
+        int_bindings={"ImportedScale": 4},
+    )
+    assert linked.eval(3) == 24
 
 
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)

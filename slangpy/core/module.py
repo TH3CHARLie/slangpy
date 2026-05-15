@@ -56,6 +56,7 @@ class Module:
         _register_hot_reload_hook(device_module.session.device)
         assert isinstance(device_module, SlangModule)
         self.options = options
+        self.source_module = device_module
 
         # Normalize link list to SlangModule instances
         link_slang_modules = [x.module if isinstance(x, Module) else x for x in link]

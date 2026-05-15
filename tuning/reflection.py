@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import TYPE_CHECKING
 
 import slangpy as spy
@@ -11,7 +12,72 @@ if TYPE_CHECKING:
     from slangpy import DeclReflection, SlangModule
 
 
-def find_tunable_decls(module: SlangModule) -> list[DeclReflection]:
+_IMPORT_RE = re.compile(r"^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*|\"[^\"]+\")\s*;", re.MULTILINE)
+
+
+def _strip_line_comments(source: str) -> str:
+    """Remove // comments for simple import discovery."""
+    return "\n".join(line.split("//", 1)[0] for line in source.splitlines())
+
+
+def _module_visit_key(module: SlangModule) -> str:
+    path = getattr(module, "path", None)
+    if path:
+        return str(path)
+    return module.name
+
+
+def _source_import_names(module: SlangModule) -> list[str]:
+    """Return direct import names written in a module source file."""
+    path = getattr(module, "path", None)
+    if not path:
+        return []
+    try:
+        source = path.read_text()
+    except OSError:
+        return []
+    names = []
+    for match in _IMPORT_RE.finditer(_strip_line_comments(source)):
+        raw = match.group(1)
+        name = raw[1:-1] if raw.startswith('"') else raw
+        if name == "slangpy":
+            continue
+        names.append(name)
+    return names
+
+
+def iter_module_and_imports(module: SlangModule) -> list[SlangModule]:
+    """Return a module and Slang modules directly or transitively imported by it.
+
+    Slang's module reflection exposes declarations from the loaded module, but
+    not all imported module declarations. Loading imported modules through the
+    same session lets tuning discovery see tunables declared in reusable modules.
+    """
+    results: list[SlangModule] = []
+    visited: set[str] = set()
+
+    def visit(current: SlangModule) -> None:
+        key = _module_visit_key(current)
+        if key in visited:
+            return
+        visited.add(key)
+        results.append(current)
+
+        session = getattr(current, "session", None)
+        if session is None:
+            return
+        for import_name in _source_import_names(current):
+            try:
+                imported = session.load_module(import_name)
+            except Exception:
+                continue
+            visit(imported)
+
+    visit(module)
+    return results
+
+
+def _find_tunable_decls_in_module(module: SlangModule) -> list[DeclReflection]:
     """Return all [Tunable] extern struct declarations in a module.
 
     :param module: A loaded Slang module.
@@ -26,6 +92,14 @@ def find_tunable_decls(module: SlangModule) -> list[DeclReflection]:
     return results
 
 
+def find_tunable_decls(module: SlangModule) -> list[DeclReflection]:
+    """Return all [Tunable] extern struct declarations in a module and imports."""
+    results = []
+    for source_module in iter_module_and_imports(module):
+        results.extend(_find_tunable_decls_in_module(source_module))
+    return results
+
+
 @dataclass
 class IntTunableInfo:
     """Describes a [Tunable(choices...)] integer variable discovered via reflection."""
@@ -34,7 +108,7 @@ class IntTunableInfo:
     choices: list[int]
 
 
-def find_tunable_int_decls(module: SlangModule) -> list[IntTunableInfo]:
+def _find_tunable_int_decls_in_module(module: SlangModule) -> list[IntTunableInfo]:
     """Return all [Tunable(choices...)] integer variable declarations in a module.
 
     Finds ``[Tunable(choices...)] extern static const int`` variable declarations,
@@ -76,6 +150,14 @@ def find_tunable_int_decls(module: SlangModule) -> list[IntTunableInfo]:
             dict.fromkeys(attr.argument_value_int(i) for i in range(attr.argument_count))
         )
         results.append(IntTunableInfo(variable_name=var.name, choices=choices))
+    return results
+
+
+def find_tunable_int_decls(module: SlangModule) -> list[IntTunableInfo]:
+    """Return all [Tunable(choices...)] integer variable declarations in a module and imports."""
+    results = []
+    for source_module in iter_module_and_imports(module):
+        results.extend(_find_tunable_int_decls_in_module(source_module))
     return results
 
 
@@ -133,12 +215,13 @@ def discover_tuning_space(module: SlangModule) -> dict[str, dict[str, list[str]]
     :return: Dict mapping tunable name -> {interface name -> [impl names]}.
     """
     result: dict[str, dict[str, list[str]]] = {}
-    for decl in find_tunable_decls(module):
-        interfaces: dict[str, list[str]] = {}
-        for itype in find_interfaces_for_decl(module, decl):
-            conformers = find_conforming_types(module, itype.name)
-            interfaces[itype.name] = [c.name for c in conformers]
-        result[decl.name] = interfaces
+    for source_module in iter_module_and_imports(module):
+        for decl in _find_tunable_decls_in_module(source_module):
+            interfaces: dict[str, list[str]] = {}
+            for itype in find_interfaces_for_decl(source_module, decl):
+                conformers = find_conforming_types(source_module, itype.name)
+                interfaces[itype.name] = [c.name for c in conformers]
+            result[decl.name] = interfaces
     return result
 
 
@@ -162,6 +245,8 @@ def link_variant(
     """
     module_name = module.name
     lines = [f'import "{module_name}";']
+    for import_name in _source_import_names(module):
+        lines.append(f'import "{import_name}";')
     name_parts = [module_name]
     for tunable_name, (interface_name, impl_name) in bindings.items():
         lines.append(f"export struct {tunable_name} : {interface_name} = {impl_name};")
@@ -171,7 +256,7 @@ def link_variant(
             lines.append(f"export static const int {tunable_name} = {value};")
             name_parts.append(f"{tunable_name}_{value}")
     additional_source = "\n".join(lines)
-    export_module = device.load_module_from_source(
+    export_module = module.session.load_module_from_source(
         "_".join(name_parts), additional_source
     )
     return spy.Module(module, link=[export_module])
